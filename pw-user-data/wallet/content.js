@@ -1,0 +1,362 @@
+/**
+ * YeYing Wallet - Content Script
+ * 职责：在页面和 background 之间转发消息（纯中继层）
+ */
+
+(async function () {
+  'use strict';
+
+  const {
+    MESSAGE_TYPE,
+    PORT_NAME,
+    MessageCategory,
+    EventType,
+    MessageBuilder
+  } = await import(chrome.runtime.getURL('js/protocol/dapp-protocol.js'));
+
+  console.debug('Content script bridge loading...');
+
+  // ==================== 协议常量 ====================
+
+  const MAX_RECONNECT_ATTEMPTS = 3;
+  const RECONNECT_DELAY_BASE = 1000; // 基础延迟 1 秒
+  const CONNECTION_STABLE_MS = 5000;
+  const QUEUE_MAX_AGE = 15000; // 请求排队超时
+  const QUEUE_MAX_SIZE = 100; // 最大排队请求数
+  const bridgeToken =
+    `${chrome.runtime.id}:${Date.now()}:${Math.random().toString(36).slice(2)}`;
+  const previousBridge = globalThis.__YEYING_WALLET_CONTENT_BRIDGE__;
+  if (previousBridge && typeof previousBridge.dispose === 'function') {
+    previousBridge.dispose('content_script_reinject');
+  }
+  const bridgeState = {
+    disposed: false,
+    dispose: null
+  };
+  globalThis.__YEYING_WALLET_CONTENT_BRIDGE__ = bridgeState;
+
+  // ==================== 注入 inject.js ====================
+
+  function injectScript() {
+    const script = document.createElement('script');
+    script.type = 'module';
+    const url = new URL(chrome.runtime.getURL('inject.js'));
+    url.searchParams.set('bridgeToken', bridgeToken);
+    script.src = url.toString();
+    script.onload = function () {
+      console.debug('inject.js loaded');
+      this.remove();
+    };
+    script.onerror = function () {
+      console.error('❌ Failed to load inject.js');
+    };
+
+    (document.head || document.documentElement).appendChild(script);
+  }
+
+  injectScript();
+
+  // ==================== 连接管理 ====================
+
+  let port = null;
+  let reconnectAttempts = 0;
+  let reconnectTimer = null;
+  let stableConnectionTimer = null;
+  const requestQueue = new Map();
+
+  function serializeRuntimeMessage(value) {
+    if (value == null || typeof value !== 'object') {
+      return value;
+    }
+    if (value instanceof Uint8Array) {
+      return Array.from(value);
+    }
+    if (value instanceof ArrayBuffer) {
+      return Array.from(new Uint8Array(value));
+    }
+    if (ArrayBuffer.isView(value)) {
+      return Array.from(new Uint8Array(value.buffer, value.byteOffset, value.byteLength));
+    }
+    if (Array.isArray(value)) {
+      return value.map((item) => serializeRuntimeMessage(item));
+    }
+    const out = {};
+    for (const [key, nested] of Object.entries(value)) {
+      out[key] = serializeRuntimeMessage(nested);
+    }
+    return out;
+  }
+
+  function initConnection() {
+    if (bridgeState.disposed) return;
+    // 检查扩展上下文是否有效
+    if (!chrome.runtime?.id) {
+      console.error('❌ Extension context invalidated');
+      sendEventToPage(EventType.DISCONNECT, {
+        reason: 'extension_context_invalidated'
+      });
+      return;
+    }
+
+    try {
+      port = chrome.runtime.connect({ name: PORT_NAME });
+
+      port.onMessage.addListener(handleBackgroundMessage);
+      port.onDisconnect.addListener(handleDisconnect);
+
+      console.debug('Bridge connected to background');
+      scheduleReconnectAttemptReset();
+
+      flushQueuedRequests();
+    } catch (error) {
+      console.error('❌ Connection failed:', error);
+      port = null;
+
+      // 重试连接
+      if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+        reconnectAttempts++;
+        const delay = RECONNECT_DELAY_BASE * reconnectAttempts;
+        console.debug(
+          `🔄 Reconnecting in ${delay}ms... (${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})`
+        );
+        scheduleReconnect(delay);
+      } else {
+        console.error('❌ Max reconnection attempts reached');
+        sendEventToPage(EventType.DISCONNECT, {
+          reason: 'max_reconnect_attempts'
+        });
+      }
+    }
+  }
+
+  function handleDisconnect() {
+    if (bridgeState.disposed) return;
+    clearStableConnectionTimer();
+
+    const error = chrome.runtime.lastError;
+    if (error) {
+      console.error('Runtime error:', error.message);
+    }
+
+    port = null;
+
+    const reason = error?.message || 'port_disconnected';
+    if (reason.includes('Extension context invalidated')) {
+      sendEventToPage(EventType.DISCONNECT, {
+        reason: 'extension_context_invalidated'
+      });
+      return;
+    }
+
+    // 重试连接
+    if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+      reconnectAttempts++;
+      const delay = RECONNECT_DELAY_BASE * reconnectAttempts;
+      console.debug(
+        `🔄 Reconnecting in ${delay}ms... (${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})`
+      );
+      scheduleReconnect(delay);
+    } else {
+      console.error('❌ Max reconnection attempts reached');
+      sendEventToPage(EventType.DISCONNECT, {
+        reason: 'max_reconnect_attempts'
+      });
+    }
+  }
+
+  function scheduleReconnect(delay) {
+    if (bridgeState.disposed || reconnectTimer) return;
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null;
+      initConnection();
+    }, delay);
+  }
+
+  function clearStableConnectionTimer() {
+    if (stableConnectionTimer) {
+      clearTimeout(stableConnectionTimer);
+      stableConnectionTimer = null;
+    }
+  }
+
+  function scheduleReconnectAttemptReset() {
+    clearStableConnectionTimer();
+    stableConnectionTimer = setTimeout(() => {
+      stableConnectionTimer = null;
+      reconnectAttempts = 0;
+    }, CONNECTION_STABLE_MS);
+  }
+
+  function flushQueuedRequests() {
+    if (bridgeState.disposed) return;
+    if (!port || requestQueue.size === 0) return;
+
+    const now = Date.now();
+    requestQueue.forEach(({ message, queuedAt }, requestId) => {
+      if (now - queuedAt > QUEUE_MAX_AGE) {
+        sendErrorToPage(requestId, {
+          code: 4900,
+          message: 'Wallet connection timed out. Please retry.'
+        });
+        requestQueue.delete(requestId);
+        return;
+      }
+
+      try {
+        port.postMessage(serializeRuntimeMessage(message));
+      } catch (error) {
+        console.error('❌ Failed to flush queued message:', error);
+        sendErrorToPage(requestId, {
+          code: -32603,
+          message: `Failed to send message: ${error.message}`
+        });
+      } finally {
+        requestQueue.delete(requestId);
+      }
+    });
+  }
+
+  // ==================== 消息处理 ====================
+
+  function handleBackgroundMessage(message) {
+    if (bridgeState.disposed) return;
+    if (message?.type !== MESSAGE_TYPE) return;
+    if (
+      message.metadata?.bridgeToken &&
+      message.metadata.bridgeToken !== bridgeToken
+    ) {
+      return;
+    }
+
+    console.debug('Bridge received from background:', message);
+
+    // 只把本 content bridge 处理过的请求响应回传给页面。
+    window.postMessage(withBridgeToken(message), '*');
+  }
+
+  function handlePageMessage(event) {
+    if (bridgeState.disposed) return;
+    // 只处理来自当前页面的消息
+    if (event.source !== window) return;
+
+    const message = event.data;
+
+    // 只处理 YEYING_MESSAGE
+    if (message?.type !== MESSAGE_TYPE) return;
+
+    if (message.metadata?.bridgeToken !== bridgeToken) {
+      return;
+    }
+
+    // 只转发请求到 background
+    if (message.category !== MessageCategory.REQUEST) {
+      console.debug('Ignoring non-request wallet bridge message:', message.category);
+      return;
+    }
+
+    console.debug('Bridge received request from page:', message);
+
+    // 检查连接
+    if (!port) {
+      const requestId = message.metadata?.id;
+      if (!requestId) {
+        console.error('❌ Port not connected and requestId missing');
+        sendErrorToPage(null, {
+          code: 4900,
+          message: 'Wallet not connected. Please refresh the page.'
+        });
+        return;
+      }
+
+      if (requestQueue.size >= QUEUE_MAX_SIZE) {
+        sendErrorToPage(requestId, {
+          code: 4900,
+          message: 'Wallet is reconnecting. Please retry shortly.'
+        });
+        return;
+      }
+
+      if (!requestQueue.has(requestId)) {
+        requestQueue.set(requestId, { message, queuedAt: Date.now() });
+      }
+      return;
+    }
+
+    // 转发到 background
+    try {
+      port.postMessage(serializeRuntimeMessage(message));
+    } catch (error) {
+      console.error('❌ Failed to send message:', error);
+      sendErrorToPage(message.metadata?.id, {
+        code: -32603,
+        message: `Failed to send message: ${error.message}`
+      });
+    }
+  }
+
+  // ==================== 辅助函数 ====================
+
+  function sendEventToPage(event, data) {
+    const message = MessageBuilder.createEvent(event, data);
+    window.postMessage(withBridgeToken(message), '*');
+  }
+
+  function sendErrorToPage(requestId, error) {
+    const message = MessageBuilder.createErrorResponse(error, requestId);
+    window.postMessage(withBridgeToken(message), '*');
+  }
+
+  function withBridgeToken(message) {
+    return {
+      ...message,
+      metadata: {
+        ...(message.metadata || {}),
+        bridgeToken
+      }
+    };
+  }
+
+  // ==================== 监听广播事件 ====================
+
+  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (bridgeState.disposed) return;
+    if (message?.type !== MESSAGE_TYPE) return;
+
+    console.debug('Content script received broadcast:', message);
+
+    // 转发事件到页面
+    if (message.category === MessageCategory.EVENT) {
+      window.postMessage(withBridgeToken(message), '*');
+      sendResponse({ success: true });
+      return true; // 保持消息通道开启
+    }
+  });
+
+  // ==================== 启动 ====================
+
+  bridgeState.dispose = function disposeBridge(reason) {
+    if (bridgeState.disposed) return;
+    bridgeState.disposed = true;
+    window.removeEventListener('message', handlePageMessage);
+    requestQueue.clear();
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
+    clearStableConnectionTimer();
+    if (port) {
+      try {
+        port.disconnect();
+      } catch (error) {
+        // Ignore disconnect errors while replacing the content bridge.
+      }
+      port = null;
+    }
+    console.debug('Content script bridge disposed:', reason);
+  };
+
+  window.addEventListener('message', handlePageMessage);
+  initConnection();
+
+  console.debug('Content script bridge ready');
+})();

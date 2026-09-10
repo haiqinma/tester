@@ -1,0 +1,911 @@
+/**
+ * YeYing Wallet - 请求路由
+ * 负责：根据方法名路由到对应的处理器
+ */
+
+import { state } from './state.js';
+import { ApprovalMessageType } from '../protocol/extension-protocol.js';
+import {
+  createWalletLockedError,
+  createAccountNotFoundError,
+  createInvalidParams,
+  createInternalError,
+  createUserRejectedError,
+  createTimeoutError,
+  createError,
+  createUnauthorizedError
+} from '../common/errors/index.js';
+import { grantIdentityScopes, handleEthAccounts, handleEthRequestAccounts, handleWalletGetPermissions, handleWalletRequestPermissions, handleWalletRevokePermissions, hasRecentConnectApproval, requestIdentityScopeApproval } from './account-handler.js';
+import { handleEthChainId, handleNetVersion, handleSwitchChain, handleAddEthereumChain } from './chain-handler.js';
+import { handleRpcMethod } from './rpc-handler.js';
+import {
+  buildMpcSignedTransactionFromSignRequest,
+  resolveMpcAccountIdByAddress,
+  signTransaction,
+  signMessage,
+  signTypedData,
+  isMpcAccountId
+} from './signing.js';
+import { getSelectedAccount, isAuthorized, updateUserSetting, getNetworkByChainId, getNetworkConfigByKey, getMpcSignRequest, getAuthorization } from '../storage/index.js';
+import { focusUnlockWindow, requestUnlock } from './unlock-flow.js';
+import { getCachedPassword } from './password-cache.js';
+import { mpcService } from './mpc-service.js';
+import { withPopupBoundsAsync } from './window-utils.js';
+import { DEFAULT_NETWORK, POPUP_DIMENSIONS, TIMEOUTS } from '../config/index.js';
+import { getTimestamp } from '../common/utils/time-utils.js';
+import { handleUcanSession, handleUcanSign } from './ucan.js';
+import { normalizeIdentityPresentationRequest, requestIdentityPresentation as handleIdentityPresentation } from './identity-presentation.js';
+import {
+  handleYeyingEncrypt,
+  handleYeyingDecrypt,
+  handleYeyingGetCipherSuites
+} from './operations/crypto-service.js';
+import {
+  addPendingRequest,
+  ensureApprovalRequestVisible,
+  ensureApprovalStateHydrated,
+  findPendingRequest,
+  findPendingRequestByClientKey,
+  focusPendingWindow,
+  getActiveApprovalSummary,
+  getClientRequestKey,
+  removePendingRequest,
+  waitForApprovalResponse
+} from './approval-flow.js';
+
+const MPC_SIGN_WAIT_TIMEOUT_MS = 60000;
+const MPC_SIGN_WAIT_INTERVAL_MS = 1500;
+
+async function handleFocusPendingApproval(origin, tabId) {
+  await ensureApprovalStateHydrated();
+
+  const approval = getActiveApprovalSummary();
+  if (approval?.windowId) {
+    chrome.windows.update(approval.windowId, { focused: true }).catch(() => { });
+    return {
+      focused: true,
+      type: approval.requestType || 'approval',
+      requestId: approval.requestId || null,
+      origin: approval.origin || '',
+      tabId: Number.isFinite(approval.tabId) ? approval.tabId : null
+    };
+  }
+
+  if (focusUnlockWindow()) {
+    return {
+      focused: true,
+      type: 'unlock',
+      requestId: null,
+      origin: origin || '',
+      tabId: Number.isFinite(tabId) ? tabId : null
+    };
+  }
+
+  return {
+    focused: false,
+    type: null,
+    requestId: null,
+    origin: '',
+    tabId: null
+  };
+}
+
+async function isActiveTab(tabId) {
+  if (!Number.isFinite(tabId)) return false;
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    if (!tab || !tab.active) return false;
+    if (!Number.isFinite(tab.windowId)) return Boolean(tab.active);
+    const win = await chrome.windows.get(tab.windowId);
+    if (win && win.focused === false) return false;
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
+async function isWalletPopupOpen() {
+  if (typeof chrome === 'undefined' || !chrome.runtime?.getContexts) {
+    return false;
+  }
+
+  try {
+    const popupUrl = chrome.runtime.getURL('html/popup.html');
+    const contexts = await chrome.runtime.getContexts({ contextTypes: ['POPUP'] });
+    return Array.isArray(contexts) && contexts.some((context) => {
+      const url = String(context?.documentUrl || '');
+      return url.startsWith(popupUrl);
+    });
+  } catch (error) {
+    return false;
+  }
+}
+
+async function recordUnlockRequest(info) {
+  if (!info) return;
+  try {
+    await updateUserSetting('lastUnlockRequest', info);
+  } catch (error) {
+    console.warn('[RequestRouter] Failed to record unlock request:', error?.message || error);
+  }
+}
+
+async function resolveSignerAccountId(defaultAccount, requestedAddress = '') {
+  const requested = String(requestedAddress || '').trim();
+  if (!requested) {
+    return defaultAccount?.id || '';
+  }
+  const mpcAccountId = await resolveMpcAccountIdByAddress(requested);
+  if (mpcAccountId) {
+    return mpcAccountId;
+  }
+  if (
+    defaultAccount?.id
+    && defaultAccount?.address
+    && String(defaultAccount.address).toLowerCase() === requested.toLowerCase()
+  ) {
+    return defaultAccount.id;
+  }
+  throw createUnauthorizedError('Requested signing address is not available');
+}
+
+async function ensureSiteAuthorized(origin) {
+  if (!origin) {
+    throw createUnauthorizedError('Unauthorized origin');
+  }
+  const authorized = state.connectedSites.has(origin) || await isAuthorized(origin);
+  if (!authorized) {
+    throw createUnauthorizedError('Site not connected');
+  }
+}
+
+async function getCurrentRpcUrl() {
+  const network = await getNetworkByChainId(state.currentChainId);
+  let rpcUrl = state.currentRpcUrl || network?.rpcUrl || network?.rpc;
+  if (!rpcUrl) {
+    const fallbackConfig = await getNetworkConfigByKey(DEFAULT_NETWORK);
+    rpcUrl = fallbackConfig?.rpcUrl || fallbackConfig?.rpc || '';
+  }
+  if (!rpcUrl) {
+    throw createInternalError('RPC URL not configured');
+  }
+  return rpcUrl;
+}
+
+export async function broadcastSignedTransaction(signedTransaction) {
+  const raw = String(signedTransaction || '').trim();
+  if (!/^0x[0-9a-fA-F]+$/.test(raw)) {
+    throw createInvalidParams('Invalid signed transaction');
+  }
+  const rpcUrl = await getCurrentRpcUrl();
+  const response = await fetch(rpcUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: getTimestamp(),
+      method: 'eth_sendRawTransaction',
+      params: [raw]
+    })
+  });
+  const payload = await response.json().catch(() => null);
+  if (!response.ok || payload?.error) {
+    throw createInternalError(payload?.error?.message || `Failed to broadcast transaction: HTTP ${response.status}`);
+  }
+  const hash = String(payload?.result || '').trim();
+  if (!/^0x[0-9a-fA-F]{64}$/.test(hash)) {
+    throw createInternalError('Invalid transaction hash returned by RPC');
+  }
+  return hash;
+}
+
+async function waitForApprovalAndExecute({
+  existingPending,
+  createPending,
+  requestType,
+  origin,
+  tabId,
+  reuseSession = false,
+  onApproved,
+  onRejectedMessage = 'User rejected the request'
+}) {
+  let requestId = existingPending?.requestId || null;
+
+  if (!requestId) {
+    requestId = createPending();
+  }
+
+  await ensureApprovalRequestVisible(requestId, {
+    requestType,
+    origin,
+    tabId,
+    reuseSession
+  });
+
+  const response = await waitForApprovalResponse(requestId);
+  if (!response?.approved) {
+    removePendingRequest(requestId);
+    throw createUserRejectedError(onRejectedMessage);
+  }
+
+  try {
+    const result = await onApproved(response);
+    removePendingRequest(requestId, { activateNext: true });
+    return result;
+  } catch (error) {
+    removePendingRequest(requestId);
+    throw error;
+  }
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isMpcSigningPendingError(error) {
+  return String(error?.code || error?.message || '').trim() === 'MPC_SIGNING_PENDING';
+}
+
+function extractMpcCompletedSignature(signRequest) {
+  return String(
+    signRequest?.signature
+    || signRequest?.signatureHex
+    || (typeof signRequest?.result?.signature === 'string' ? signRequest.result.signature : '')
+    || (typeof signRequest?.result?.signatureHex === 'string' ? signRequest.result.signatureHex : '')
+    || ''
+  ).trim();
+}
+
+function extractMpcCompletedSignedTransaction(signRequest) {
+  return buildMpcSignedTransactionFromSignRequest(signRequest);
+}
+
+function extractMpcCompletedResult(signRequest, resultType) {
+  if (resultType === 'signedTransaction') {
+    return extractMpcCompletedSignedTransaction(signRequest);
+  }
+  return extractMpcCompletedSignature(signRequest);
+}
+
+function createMpcCompletedWithoutResultError(resultType) {
+  if (resultType === 'signedTransaction') {
+    return createInternalError('MPC transaction signing completed without signed transaction');
+  }
+  return createInternalError('MPC signing completed without signature');
+}
+
+async function waitForMpcSignatureCompletion(pendingError, { resultType = 'signature' } = {}) {
+  const requestId = String(pendingError?.requestId || pendingError?.signRequest?.id || '').trim();
+  if (!requestId) {
+    throw pendingError;
+  }
+
+  const deadline = Date.now() + MPC_SIGN_WAIT_TIMEOUT_MS;
+  let lastStatus = String(pendingError?.signRequest?.status || 'pending').trim().toLowerCase();
+  while (Date.now() < deadline) {
+    await mpcService.processPendingWireSignRequests({
+      requestId,
+      syncRemote: true,
+      maxTicks: 5
+    }).catch(() => null);
+
+    const signRequest = await getMpcSignRequest(requestId);
+    lastStatus = String(signRequest?.status || lastStatus || '').trim().toLowerCase();
+    if (lastStatus === 'completed') {
+      const result = extractMpcCompletedResult(signRequest, resultType);
+      if (!result) {
+        throw createMpcCompletedWithoutResultError(resultType);
+      }
+      return result;
+    }
+    if (lastStatus === 'rejected') {
+      throw createUserRejectedError('MPC signing request rejected');
+    }
+    if (lastStatus === 'expired') {
+      throw createTimeoutError('MPC signing request expired');
+    }
+    if (lastStatus === 'failed') {
+      throw createInternalError(signRequest?.error || 'MPC signing request failed');
+    }
+    await sleep(MPC_SIGN_WAIT_INTERVAL_MS);
+  }
+
+  throw createTimeoutError('MPC signing is waiting for other participants');
+}
+
+async function executeMpcAwareSignature(operation, options = {}) {
+  try {
+    return await operation();
+  } catch (error) {
+    if (!isMpcSigningPendingError(error)) {
+      throw error;
+    }
+    return await waitForMpcSignatureCompletion(error, options);
+  }
+}
+
+/**
+ * 路由请求到对应的处理器
+ * @param {string} method - RPC 方法名
+ * @param {Array} params - 参数
+ * @param {Object} metadata - 元数据 {origin, tabId}
+ * @returns {Promise<any>} 处理结果
+ */
+export async function routeRequest(method, params, metadata) {
+  const { origin, tabId, clientRequestId } = metadata;
+  const paramsArray = Array.isArray(params) ? params : (params == null ? [] : [params]);
+  const rpcParams = params == null ? [] : params;
+
+  console.log(`📍 Routing request: ${method}`, { origin, params });
+  await ensureApprovalStateHydrated();
+
+  if (method === 'wallet_focusPendingApproval') {
+    return handleFocusPendingApproval(origin, tabId);
+  }
+
+  // ==================== 不需要解锁的方法 ====================
+  
+  if (method === 'eth_accounts') {
+    return handleEthAccounts(origin);
+  }
+
+  if (method === 'eth_chainId') {
+    return handleEthChainId();
+  }
+
+  if (method === 'net_version') {
+    return handleNetVersion();
+  }
+
+  if (method === 'wallet_getPermissions') {
+    return handleWalletGetPermissions(origin);
+  }
+
+  if (method === 'wallet_revokePermissions') {
+    return handleWalletRevokePermissions(origin, paramsArray);
+  }
+
+  // ==================== 需要解锁的方法 ====================
+
+  const unlockMethods = new Set([
+    'eth_requestAccounts',
+    'eth_sendTransaction',
+    'eth_signTransaction',
+    'personal_sign',
+    'eth_sign',
+    'eth_signTypedData',
+    'eth_signTypedData_v4',
+    'wallet_ucan_session',
+    'wallet_ucan_sign',
+    'wallet_identity_presentation',
+    'wallet_encrypt',
+    'wallet_decrypt'
+  ]);
+
+  const blockedWhilePopupOpenMethods = new Set([
+    ...unlockMethods,
+    'wallet_requestPermissions',
+    'wallet_watchAsset',
+    'wallet_addEthereumChain',
+    'wallet_switchEthereumChain'
+  ]);
+  blockedWhilePopupOpenMethods.delete('wallet_identity_presentation');
+
+  if (blockedWhilePopupOpenMethods.has(method) && await isWalletPopupOpen()) {
+    throw createError(-32002, 'Wallet popup is currently open. Close it and retry.');
+  }
+
+  const selectedAccountBeforeUnlock = unlockMethods.has(method)
+    ? await getSelectedAccount()
+    : null;
+  const selectedAccountUnlocked = Boolean(
+    selectedAccountBeforeUnlock?.id && state.keyring?.has(selectedAccountBeforeUnlock.id)
+  );
+  const identityPresentationNeedsPasswordCache =
+    method === 'wallet_identity_presentation' && !getCachedPassword();
+
+  if (unlockMethods.has(method) && (!selectedAccountUnlocked || identityPresentationNeedsPasswordCache)) {
+    const active = await isActiveTab(tabId);
+    if (!active) {
+      throw createUserRejectedError('Unlock requires active tab');
+    }
+    await recordUnlockRequest({
+      origin: origin || '',
+      method,
+      tabId: Number.isFinite(tabId) ? tabId : null,
+      timestamp: getTimestamp()
+    });
+    await requestUnlock({
+      origin,
+      tabId,
+      method,
+      accountId: selectedAccountBeforeUnlock?.id || null,
+      force: method === 'wallet_identity_presentation' && identityPresentationNeedsPasswordCache
+    });
+  }
+
+  // 获取当前账户
+  const account = await getSelectedAccount();
+  if (!account) {
+    throw createAccountNotFoundError('No account selected');
+  }
+
+  // 检查当前账户是否已解锁
+  if (unlockMethods.has(method) && !state.keyring?.has(account.id)) {
+    throw createWalletLockedError();
+  }
+
+  // ==================== 账户相关 ====================
+
+  if (method === 'eth_requestAccounts') {
+    return handleEthRequestAccounts(origin, tabId, clientRequestId);
+  }
+
+  if (method === 'wallet_requestPermissions') {
+    return handleWalletRequestPermissions(origin, tabId, paramsArray);
+  }
+
+  // ==================== UCAN 相关 ====================
+
+  if (method === 'wallet_ucan_session') {
+    await ensureSiteAuthorized(origin);
+    return handleUcanSession(origin, account, params);
+  }
+
+  if (method === 'wallet_ucan_sign') {
+    await ensureSiteAuthorized(origin);
+    return handleUcanSign(origin, account, params);
+  }
+
+  if (method === 'wallet_identity_presentation') {
+    await ensureSiteAuthorized(origin);
+    return handleIdentityPresentationApproval(account, paramsArray, origin, tabId, clientRequestId);
+  }
+
+  // ==================== 加密服务 ====================
+
+  if (method === 'wallet_getCipherSuites') {
+    // 读取套件列表（只读元数据，无需 unlock / site auth）
+    return handleYeyingGetCipherSuites(origin, account, params);
+  }
+
+  if (method === 'wallet_encrypt') {
+    await ensureSiteAuthorized(origin);
+    return handleYeyingEncrypt(origin, account, params);
+  }
+
+  if (method === 'wallet_decrypt') {
+    await ensureSiteAuthorized(origin);
+    return handleYeyingDecrypt(origin, account, params);
+  }
+
+  // ==================== 链相关 ====================
+
+  if (method === 'wallet_switchEthereumChain') {
+    return handleSwitchChain(paramsArray);
+  }
+
+  if (method === 'wallet_addEthereumChain') {
+    return handleAddEthereumChain(paramsArray);
+  }
+
+  if (method === 'wallet_watchAsset') {
+    return handleWatchAsset(origin, paramsArray, tabId);
+  }
+
+  // ==================== 签名相关 ====================
+
+  if (method === 'eth_sendTransaction') {
+    return handleSendTransaction(account, paramsArray, origin, tabId, clientRequestId);
+  }
+
+  if (method === 'eth_signTransaction') {
+    return handleSignTransaction(account, paramsArray, origin, tabId, clientRequestId);
+  }
+
+  if (method === 'personal_sign' || method === 'eth_sign') {
+    return handlePersonalSign(account, paramsArray, origin, tabId, method, clientRequestId);
+  }
+
+  if (method === 'eth_signTypedData' || method === 'eth_signTypedData_v4') {
+    return handleSignTypedData(account, paramsArray, origin, tabId, method, clientRequestId);
+  }
+
+  // ==================== RPC 转发 ====================
+
+  // 其他方法转发到 RPC 节点
+  return handleRpcMethod(method, rpcParams);
+}
+
+
+async function handleIdentityPresentationApproval(account, params, origin, tabId) {
+  const request = normalizeIdentityPresentationRequest(params, origin);
+  const stored = await getAuthorization(origin);
+  const grantedScopes = Array.isArray(stored?.identityScopes) ? stored.identityScopes : [];
+  const missingScopes = request.scopes.filter((scope) => !grantedScopes.includes(scope));
+  if (missingScopes.length > 0) {
+    if (hasRecentConnectApproval(origin, tabId)) {
+      await grantIdentityScopes(origin, request.scopes, account);
+    } else {
+      await requestIdentityScopeApproval(origin, tabId, request.scopes, account);
+    }
+  }
+  return handleIdentityPresentation({ account, params: request, origin });
+}
+
+// ==================== 代币相关 ====================
+
+/**
+ * 处理 wallet_watchAsset
+ * @param {string} origin - 来源
+ * @param {Array} params - 参数 [{ type, options }]
+ * @param {number} tabId - 标签页 ID
+ * @returns {Promise<boolean>} 是否添加成功
+ */
+async function handleWatchAsset(origin, params, tabId) {
+  const [request] = params;
+
+  if (!request || typeof request !== 'object') {
+    throw createInvalidParams('Invalid watchAsset parameters');
+  }
+
+  const type = request.type || request.assetType || 'ERC20';
+  if (String(type).toUpperCase() !== 'ERC20') {
+    throw createInvalidParams('Only ERC20 assets are supported');
+  }
+
+  const options = request.options && typeof request.options === 'object'
+    ? request.options
+    : request;
+
+  const address = options.address;
+  const symbol = options.symbol;
+  const decimalsRaw = options.decimals;
+  const decimals = Number.isFinite(decimalsRaw) ? decimalsRaw : Number.parseInt(decimalsRaw, 10);
+
+  if (!address || !symbol) {
+    throw createInvalidParams('address and symbol are required');
+  }
+
+  const tokenInfo = {
+    address,
+    symbol,
+    decimals: Number.isFinite(decimals) ? decimals : 18,
+    image: options.image,
+    name: options.name
+  };
+
+  const pending = findPendingRequest('watchAsset', origin, tabId);
+  if (pending) {
+    focusPendingWindow(pending);
+    throw createError(-32002, 'Watch asset request already pending');
+  }
+
+  const requestId = `watch_asset_${getTimestamp()}_${Math.random().toString(36).substr(2, 9)}`;
+
+  addPendingRequest(requestId, {
+    type: 'watchAsset',
+    origin,
+    tabId,
+    data: {
+      origin,
+      asset: tokenInfo,
+      tokenInfo
+    },
+    timestamp: getTimestamp()
+  });
+
+  return new Promise(async (resolve, reject) => {
+    const windowOptions = await withPopupBoundsAsync({
+      url: `html/approval.html?requestId=${requestId}&type=watchAsset`,
+      type: 'popup',
+      width: POPUP_DIMENSIONS.width,
+      height: POPUP_DIMENSIONS.height,
+      focused: true
+    });
+
+    chrome.windows.create(windowOptions, (window) => {
+      if (!window) {
+        removePendingRequest(requestId);
+        reject(createInternalError('Failed to open approval window'));
+        return;
+      }
+
+      const pendingRequest = state.pendingRequests.get(requestId);
+      if (pendingRequest) {
+        pendingRequest.windowId = window.id;
+      }
+
+      const windowRemovedListener = (windowId) => {
+        if (windowId === window.id) {
+          chrome.windows.onRemoved.removeListener(windowRemovedListener);
+          chrome.runtime.onMessage.removeListener(messageListener);
+
+          if (state.pendingRequests.has(requestId)) {
+            removePendingRequest(requestId);
+            reject(createUserRejectedError('User closed approval window'));
+          }
+        }
+      };
+
+      const messageListener = (message) => {
+        if (message.type === ApprovalMessageType.APPROVAL_RESPONSE && message.requestId === requestId) {
+          chrome.windows.onRemoved.removeListener(windowRemovedListener);
+          chrome.runtime.onMessage.removeListener(messageListener);
+
+          removePendingRequest(requestId);
+
+          if (message.approved) {
+            resolve(true);
+          } else {
+            resolve(false);
+          }
+        }
+      };
+
+      chrome.windows.onRemoved.addListener(windowRemovedListener);
+      chrome.runtime.onMessage.addListener(messageListener);
+
+      setTimeout(() => {
+        if (state.pendingRequests.has(requestId)) {
+          chrome.windows.onRemoved.removeListener(windowRemovedListener);
+          chrome.runtime.onMessage.removeListener(messageListener);
+
+          removePendingRequest(requestId);
+          chrome.windows.remove(window.id).catch(() => { });
+          reject(createTimeoutError('Approval request timeout'));
+        }
+      }, 300000);
+    });
+  });
+}
+
+// ==================== 签名方法处理器 ====================
+
+/**
+ * 处理 eth_sendTransaction
+ * @param {string} accountId - 账户 ID
+ * @param {Array} params - 参数
+ * @param {string} origin - 来源
+ * @param {number} tabId - 标签页 ID
+ * @returns {Promise<string>} 交易哈希
+ */
+async function handleSendTransaction(account, params, origin, tabId, clientRequestId) {
+  const [transaction] = params;
+
+  if (!transaction || typeof transaction !== 'object') {
+    throw createInvalidParams('Invalid transaction object');
+  }
+  const signerAccountId = await resolveSignerAccountId(account, transaction.from);
+
+  const pending = findPendingRequest('transaction', origin, tabId);
+  const clientRequestKey = getClientRequestKey(origin, tabId, 'eth_sendTransaction', clientRequestId);
+  const existingPending = findPendingRequestByClientKey(clientRequestKey);
+  if (pending && !existingPending) {
+    focusPendingWindow(pending);
+    throw createError(-32002, 'Transaction approval already pending');
+  }
+
+  return waitForApprovalAndExecute({
+    existingPending,
+    requestType: 'transaction',
+    origin,
+    tabId,
+    createPending: () => {
+      const requestId = `tx_${getTimestamp()}_${Math.random().toString(36).substr(2, 9)}`;
+      addPendingRequest(requestId, {
+        type: 'transaction',
+        approvalType: 'transaction',
+        origin,
+        tabId,
+        clientRequestKey,
+        expiresAt: Date.now() + TIMEOUTS.REQUEST,
+        data: {
+          accountId: signerAccountId,
+          transaction,
+          origin
+        },
+        timestamp: getTimestamp()
+      });
+      return requestId;
+    },
+    onApproved: async () => {
+      console.log('✅ Transaction approved, signing...');
+      const result = await executeMpcAwareSignature(
+        () => signTransaction(signerAccountId, transaction),
+        isMpcAccountId(signerAccountId) ? { resultType: 'signedTransaction' } : {}
+      );
+      if (isMpcAccountId(signerAccountId)) {
+        return await broadcastSignedTransaction(result);
+      }
+      return result.hash;
+    },
+    onRejectedMessage: 'User rejected the transaction'
+  });
+}
+
+/**
+ * 处理 eth_signTransaction
+ * @param {string} accountId - 账户 ID
+ * @param {Array} params - 参数
+ * @param {string} origin - 来源
+ * @param {number} tabId - 标签页 ID
+ * @returns {Promise<string>} 签名后的交易
+ */
+async function handleSignTransaction(account, params, origin, tabId, clientRequestId) {
+  // 与 handleSendTransaction 类似，但只返回签名后的交易，不发送
+  const [transaction] = params;
+
+  if (!transaction || typeof transaction !== 'object') {
+    throw createInvalidParams('Invalid transaction object');
+  }
+  const signerAccountId = await resolveSignerAccountId(account, transaction.from);
+
+  const pending = findPendingRequest('sign_transaction', origin, tabId);
+  const clientRequestKey = getClientRequestKey(origin, tabId, 'eth_signTransaction', clientRequestId);
+  const existingPending = findPendingRequestByClientKey(clientRequestKey);
+  if (pending && !existingPending) {
+    focusPendingWindow(pending);
+    throw createError(-32002, 'Sign transaction request already pending');
+  }
+
+  return waitForApprovalAndExecute({
+    existingPending,
+    requestType: 'sign_transaction',
+    origin,
+    tabId,
+    createPending: () => {
+      const requestId = `sign_tx_${getTimestamp()}_${Math.random().toString(36).substr(2, 9)}`;
+      addPendingRequest(requestId, {
+        type: 'sign_transaction',
+        approvalType: 'sign_transaction',
+        origin,
+        tabId,
+        clientRequestKey,
+        expiresAt: Date.now() + TIMEOUTS.REQUEST,
+        data: {
+          accountId: signerAccountId,
+          transaction,
+          origin
+        },
+        timestamp: getTimestamp()
+      });
+      return requestId;
+    },
+    onApproved: async () => executeMpcAwareSignature(
+      () => signTransaction(signerAccountId, transaction),
+      isMpcAccountId(signerAccountId) ? { resultType: 'signedTransaction' } : {}
+    ),
+    onRejectedMessage: 'User rejected the transaction'
+  });
+}
+
+/**
+ * 处理 personal_sign
+ * @param {string} accountId - 账户 ID
+ * @param {Array} params - 参数
+ * @param {string} origin - 来源
+ * @param {number} tabId - 标签页 ID
+ * @returns {Promise<string>} 签名
+ */
+async function handlePersonalSign(account, params, origin, tabId, method, clientRequestId) {
+  // personal_sign 参数顺序: [message, address]
+  // eth_sign 参数顺序: [address, message]
+  let messageToSign, address;
+
+  if (params.length === 2) {
+    // 尝试判断参数顺序
+    if (params[0].startsWith('0x') && params[0].length === 42) {
+      // eth_sign 格式
+      [address, messageToSign] = params;
+    } else {
+      // personal_sign 格式
+      [messageToSign, address] = params;
+    }
+  } else {
+    throw createInvalidParams('Invalid parameters for personal_sign');
+  }
+  const signerAccountId = await resolveSignerAccountId(account, address);
+
+  const pending = findPendingRequest('sign_message', origin, tabId);
+  const clientRequestKey = getClientRequestKey(origin, tabId, method, clientRequestId);
+  const existingPending = findPendingRequestByClientKey(clientRequestKey);
+  if (pending && !existingPending) {
+    focusPendingWindow(pending);
+    throw createError(-32002, 'Sign message request already pending');
+  }
+
+  return waitForApprovalAndExecute({
+    existingPending,
+    requestType: 'sign_message',
+    origin,
+    tabId,
+    reuseSession: true,
+    createPending: () => {
+      const requestId = `sign_msg_${getTimestamp()}_${Math.random().toString(36).substr(2, 9)}`;
+      addPendingRequest(requestId, {
+        type: 'sign_message',
+        approvalType: 'sign_message',
+        origin,
+        tabId,
+        reuseSession: true,
+        clientRequestKey,
+        expiresAt: Date.now() + TIMEOUTS.REQUEST,
+        data: {
+          accountId: signerAccountId,
+          message: messageToSign,
+          origin
+        },
+        timestamp: getTimestamp()
+      });
+      return requestId;
+    },
+    onApproved: async () => executeMpcAwareSignature(() => signMessage(signerAccountId, messageToSign)),
+    onRejectedMessage: 'User rejected the signature request'
+  });
+}
+
+/**
+ * 处理 eth_signTypedData
+ * @param {string} accountId - 账户 ID
+ * @param {Array} params - 参数
+ * @param {string} origin - 来源
+ * @param {number} tabId - 标签页 ID
+ * @returns {Promise<string>} 签名
+ */
+async function handleSignTypedData(account, params, origin, tabId, method, clientRequestId) {
+  // eth_signTypedData_v4 参数: [address, typedData]
+  const [address, typedDataJson] = params;
+
+  if (!typedDataJson) {
+    throw createInvalidParams('Invalid typed data');
+  }
+  const signerAccountId = await resolveSignerAccountId(account, address);
+
+  let typedData;
+  try {
+    typedData = typeof typedDataJson === 'string' ? JSON.parse(typedDataJson) : typedDataJson;
+  } catch (error) {
+    throw createInvalidParams('Invalid JSON for typed data');
+  }
+
+  const pending = findPendingRequest('sign_typed_data', origin, tabId);
+  const clientRequestKey = getClientRequestKey(origin, tabId, method, clientRequestId);
+  const existingPending = findPendingRequestByClientKey(clientRequestKey);
+  if (pending && !existingPending) {
+    focusPendingWindow(pending);
+    throw createError(-32002, 'Sign typed data request already pending');
+  }
+
+  return waitForApprovalAndExecute({
+    existingPending,
+    requestType: 'sign_typed_data',
+    origin,
+    tabId,
+    reuseSession: true,
+    createPending: () => {
+      const requestId = `sign_typed_${getTimestamp()}_${Math.random().toString(36).substr(2, 9)}`;
+      addPendingRequest(requestId, {
+        type: 'sign_typed_data',
+        approvalType: 'sign_typed_data',
+        origin,
+        tabId,
+        reuseSession: true,
+        clientRequestKey,
+        expiresAt: Date.now() + TIMEOUTS.REQUEST,
+        data: {
+          accountId: signerAccountId,
+          typedData,
+          origin
+        },
+        timestamp: getTimestamp()
+      });
+      return requestId;
+    },
+    onApproved: async () => {
+      const { domain, types, message: value } = typedData;
+      return executeMpcAwareSignature(() => signTypedData(signerAccountId, domain, types, value));
+    },
+    onRejectedMessage: 'User rejected the signature request'
+  });
+}

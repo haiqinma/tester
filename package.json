@@ -1,0 +1,30 @@
+{
+  "name": "tester",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "playwright test",
+    "test:prepare": "playwright test tests/prepare",
+    "test:chat": "playwright test tests/chat",
+    "test:router": "playwright test tests/router",
+    "test:warehouse": "playwright test tests/warehouse",
+    "test:node": "playwright test tests/node"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/haiqinma/tester.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/haiqinma/tester/issues"
+  },
+  "homepage": "https://github.com/haiqinma/tester#readme",
+  "devDependencies": {
+    "@playwright/test": "^1.63.0",
+    "@types/node": "^26.4.1"
+  }
+}

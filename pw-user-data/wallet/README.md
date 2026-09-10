@@ -1,0 +1,86 @@
+# 客户端浏览器插件
+
+## 本地插件安装
+
+1. 克隆代码到本地
+2. 在浏览器中输入：chrome://extensions/
+3. 打开右上角“开发者模式”开关
+4. 点击“加载未打包的扩展程序”，并指定代码目录，即完成安装
+
+## 文档
+
+- [文档中心与阅读导航](./docs/README.md)
+- [钱包架构 V1（当前实现）](./docs/钱包架构V1.md)
+- [钱包架构 V2（目标架构）](./docs/钱包架构V2.md)
+- [用户使用手册](./docs/用户使用手册.md)
+- [Web3 应用集成手册](./docs/web3应用集成手册.md)
+- [SIWE 协议说明与使用指南](./docs/SIWE协议说明.md)
+- [UCAN 协议说明与使用指南（Chat / Router / WebDAV 模板）](./docs/UCAN协议说明.md)
+- [钱包身份方案（DID / Passkey / WebAuthn / Node）](./docs/钱包身份方案.md)
+- [钱包存储方案](./docs/钱包存储方案.md)
+- [MPC 门限钱包方案](./docs/MPC门限钱包方案.md)
+
+
+## 标准 / EIP 支持矩阵
+
+> 说明：此列表用于持续维护，新增或调整标准支持时请同步更新。
+
+| 标准 | 状态 | 说明 |
+| --- | --- | --- |
+| EIP-1193 Provider API | ✅ 已支持 | `request` + 连接/链/账户事件（`connect`/`disconnect`/`accountsChanged`/`chainChanged`） |
+| EIP-1193 错误码 | ✅ 已支持 | 标准化错误返回 |
+| EIP-6963 多 Provider 发现 | ✅ 已支持 | `eip6963:announceProvider` / `eip6963:requestProvider`；uuid 按加载随机生成、info/detail 冻结 |
+| EIP-2255 Permissions | ✅ 已支持 | `wallet_requestPermissions` / `wallet_getPermissions` / `wallet_revokePermissions`（仅 `eth_accounts`） |
+| EIP-3326 | ✅ 已支持 | `wallet_switchEthereumChain` |
+| EIP-3085 | ✅ 已支持 | `wallet_addEthereumChain` |
+| EIP-712 | ✅ 已支持 | `eth_signTypedData` / `eth_signTypedData_v4` |
+| EIP-747 | ✅ 已支持 | `wallet_watchAsset` |
+| EIP-1559 | ✅ 已支持 | EIP-1559 费用字段与计算 |
+| EIP-681 | ✅ 已支持 | 以太坊 URI 二维码 |
+| EIP-4361 (SIWE) | ✅ 已支持 | 解析并展示 SIWE 文本 |
+| EIP-5573 (ReCap) | ✅ 已支持 | 解析 `urn:recap:` 并结构化展示能力 |
+| ERC-20 | ✅ 基础支持 | 添加代币 + 余额展示 |
+| EIP-55 | ✅ 已支持 | 地址校验和校验：纯大小写放行，混合大小写强制 EIP-55 校验和（拒绝改了某一位的错误地址） |
+
+### 标准支持更新约定
+- 新增/变更 EIP 或标准时，请在此矩阵补充条目并写明状态与说明。
+- 若仅部分支持，请在“说明”里标注限制范围。
+
+## 功能说明
+
+✅ 已实现功能：
+
+✅ 创建新钱包
+✅ 导入钱包（通过私钥）
+✅ 查看余额
+✅ 发送交易
+✅ 切换网络（主网/测试网）
+✅ 导出私钥
+✅ 复制地址
+✅ 密码保护
+✅ 交易历史记录
+✅ 更好的二维码生成
+✅ 添加助记词支持
+✅ 多账户管理
+
+🔧 可扩展功能：
+- NFT 支持（ERC-721 / ERC-1155）
+- 更多链与协议扩展
+
+## 下载依赖包
+curl -L -o lib/ethers-6.16.esm.min.js https://cdn.jsdelivr.net/npm/ethers@6/dist/ethers.min.js
+curl -o qrcode.min.js https://unpkg.com/qrcodejs@1.0.0/qrcode.min.js
+
+## 回归检查
+
+> 本项目零运行时/构建依赖，测试同样不引入第三方框架，统一使用 Node 内置 test runner 与 `assert`。
+
+- 单元测试（crypto / vault / keyring / IDB 集成，Node 内置 runner，默认 worker 隔离）：`npm install && npm test`
+  - `fake-indexeddb@6` 是**仅测试用的 devDependency**（`lib/` 仍 vendored 运行时库，扩展本身零运行时依赖）。
+  - `--test-force-exit`：keyring/sync/mpc 单例会留 setTimeout，强制退出避免事件循环挂起。
+- sync-service 集成测试（mock fetch + chrome + fake-indexeddb，必须**单进程顺序跑**——其单例与 IDB 连接无法跨 worker 序列化）：`npm run test:sync`
+- 一键全部跑：`npm run test:all`
+- CI：`.github/workflows/ci.yml` 自动跑 `npm test` + `npm run test:sync` + `npm run test:approval` + `npm run typecheck`（Node 22.x）。
+- 审批弹窗复用回归脚本：`node --experimental-vm-modules tests/test-approval-flow.mjs`
+- 类型检查（JSDoc + `// @ts-check`，按需临时拉 tsc，不入库 node_modules）：`npx -y -p typescript@5 tsc -p tsconfig.json`
+  - `tsconfig.json` 设 `checkJs:false`，仅检查带 `// @ts-check` 的文件；新增注解文件自动纳入。

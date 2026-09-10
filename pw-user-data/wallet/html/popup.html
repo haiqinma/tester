@@ -1,0 +1,2027 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>夜莺钱包</title>
+    <base href="../" />
+    <link rel="stylesheet" href="css/common.css" />
+    <link rel="stylesheet" href="css/mnemonic.css" />
+    <link rel="stylesheet" href="css/settings.css" />
+    <link rel="stylesheet" href="css/transaction.css" />
+    <link rel="stylesheet" href="css/wallet.css" />
+    <link rel="stylesheet" href="css/accounts.css" />
+    <link rel="stylesheet" href="css/network.css" />
+    <link rel="stylesheet" href="css/contacts.css" />
+  </head>
+
+  <body>
+    <div class="container">
+      <!-- 添加加载页面，默认显示 -->
+      <div id="loadingPage" class="page">
+        <div class="loading-container">
+          <div class="loading-spinner"></div>
+          <p>加载中...</p>
+        </div>
+      </div>
+
+      <!-- 欢迎页面 -->
+      <div id="welcomePage" class="page hidden">
+        <h2>夜莺钱包</h2>
+        <button id="welcomeCreateWalletBtn" class="btn btn-primary">
+          新建钱包
+        </button>
+        <button id="welcomeImportWalletBtn" class="btn btn-secondary">
+          导入钱包
+        </button>
+        <button id="welcomeRecoverWalletBtn" class="btn btn-secondary">
+          恢复托管钱包
+        </button>
+      </div>
+
+      <div id="custodyRecoveryPage" class="page hidden">
+        <div class="page-header">
+          <button id="custodyRecoveryBackBtn" class="back-btn" type="button">←</button>
+          <h2>恢复托管钱包</h2>
+        </div>
+        <div class="settings-body">
+          <p class="settings-card-description">选择要恢复的钱包，并输入创建托管记录时使用的钱包密码。</p>
+          <div id="custodyRecoveryList" class="custody-summary"></div>
+          <div class="form-group">
+            <label for="custodyRecoveryPassword">原钱包密码</label>
+            <input id="custodyRecoveryPassword" class="input" type="password" autocomplete="current-password" />
+          </div>
+          <button id="custodyRecoveryConfirmBtn" class="btn btn-primary btn-block" type="button">恢复钱包</button>
+        </div>
+      </div>
+
+      <!-- 主钱包页面 -->
+      <div id="walletPage" class="page hidden">
+        <!-- Header 区域 -->
+        <div class="wallet-header">
+          <div class="wallet-header-top">
+            <div
+              class="account-selector"
+              id="accountHeader"
+              role="button"
+              tabindex="0"
+              aria-label="切换账户"
+            >
+              <div class="account-avatar" id="walletAvatar"></div>
+              <div class="account-info">
+                <div class="account-name">
+                  <span id="accountName" class="account-name-text">主账户</span>
+                </div>
+                <div class="account-address-row">
+                  <div id="accountAddress" class="account-address-text">-</div>
+                  <button id="copyHeaderAddressBtn" class="account-address-copy" type="button" title="复制地址" aria-label="复制当前账户地址">
+                    <svg class="copy-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <rect x="9" y="9" width="13" height="13" rx="2"></rect>
+                      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                    </svg>
+                    <svg class="copy-success-icon hidden" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                      <polyline points="20 6 9 17 4 12"></polyline>
+                    </svg>
+                  </button>
+                </div>
+              </div>
+              <button
+                class="dropdown-arrow"
+                id="accountDropdownBtn"
+                type="button"
+                aria-label="切换账户"
+                aria-expanded="false"
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                  <polyline points="6 9 12 15 18 9"></polyline>
+                </svg>
+              </button>
+              <div id="accountSwitcherMenu" class="account-switcher-menu hidden" role="menu">
+                <div id="accountSwitcherList" class="account-switcher-list"></div>
+                <button type="button" id="manageAccountsBtn" class="account-switcher-manage">管理账户</button>
+              </div>
+            </div>
+
+            <div class="header-actions">
+              <button class="header-primary-btn" id="transferBtn" title="转账">
+                <svg
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                >
+                  <path d="M22 2L11 13"></path>
+                  <path d="M22 2L15 22l-4-9-9-4 20-7z"></path>
+                </svg>
+                <span>转账</span>
+              </button>
+              <div class="header-menu">
+                <button
+                  class="header-icon-btn"
+                  id="walletHeaderMenuBtn"
+                  title="更多"
+                  aria-haspopup="menu"
+                  aria-expanded="false"
+                >
+                  <svg
+                    width="18"
+                    height="18"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                  >
+                    <circle cx="12" cy="12" r="1"></circle>
+                    <circle cx="19" cy="12" r="1"></circle>
+                    <circle cx="5" cy="12" r="1"></circle>
+                  </svg>
+                </button>
+                <div id="walletHeaderMenu" class="header-dropdown-menu hidden" role="menu">
+                  <button type="button" class="header-menu-item" id="contactsBtn">好友管理</button>
+                  <button type="button" class="header-menu-item" id="sitesManageBtn">网站管理</button>
+                  <button type="button" class="header-menu-item" id="settingsBtn">设置</button>
+                  <button type="button" class="header-menu-item" id="lockWalletBtn">锁定钱包</button>
+                  <button type="button" class="header-menu-item" id="helpDocBtn">帮助文档</button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <button
+            id="backupSyncStatusBadge"
+            class="sync-status-badge"
+            type="button"
+            title="同步状态"
+            aria-label="同步状态"
+          >
+            <svg
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <path d="M21 12a9 9 0 0 1-9 9"></path>
+              <path d="M3 12a9 9 0 0 1 9-9"></path>
+              <path d="M21 3v6h-6"></path>
+              <path d="M3 21v-6h6"></path>
+            </svg>
+            <span id="backupSyncStatusText">同步状态</span>
+          </button>
+        </div>
+
+        <!-- 标签页 -->
+        <div class="tabs">
+          <button class="tab active" id="tokensTab">通证</button>
+          <button class="tab" id="collectiblesTab">藏品</button>
+          <button class="tab" id="activityTab">活动</button>
+        </div>
+
+        <!-- 通证内容 -->
+        <div id="tokensContent" class="tab-content">
+          <div class="tab-toolbar">
+            <div class="network-selector" data-network-selector="true">
+              <div class="network-dot"></div>
+              <button type="button" class="network-trigger" aria-haspopup="listbox" aria-expanded="false">
+                <span class="network-label"></span>
+                <span class="network-chevron">▾</span>
+              </button>
+              <div class="network-menu hidden" role="listbox"></div>
+            </div>
+            <div class="tab-toolbar-actions">
+              <button id="tokenAddBtn" class="btn btn-icon" aria-label="添加通证" title="添加通证">
+                <svg
+                  width="18"
+                  height="18"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                >
+                  <path d="M12 5v14"></path>
+                  <path d="M5 12h14"></path>
+                </svg>
+              </button>
+            </div>
+          </div>
+          <div id="tokenList" class="token-list">
+            <div class="empty-state">
+              <p>🪙</p>
+              <p>暂无通证</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- 藏品内容 -->
+        <div id="collectiblesContent" class="tab-content hidden">
+          <div class="tab-toolbar">
+            <div class="network-selector" data-network-selector="true">
+              <div class="network-dot"></div>
+              <button type="button" class="network-trigger" aria-haspopup="listbox" aria-expanded="false">
+                <span class="network-label"></span>
+                <span class="network-chevron">▾</span>
+              </button>
+              <div class="network-menu hidden" role="listbox"></div>
+            </div>
+            <div class="tab-toolbar-actions"></div>
+          </div>
+          <div id="collectiblesList" class="collectibles-list">
+            <div class="empty-state">
+              <p>🎁</p>
+              <p>暂无藏品</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- 活动内容 -->
+        <div id="activityContent" class="tab-content hidden">
+          <div class="tab-toolbar">
+            <div class="network-selector" data-network-selector="true">
+              <div class="network-dot"></div>
+              <button type="button" class="network-trigger" aria-haspopup="listbox" aria-expanded="false">
+                <span class="network-label"></span>
+                <span class="network-chevron">▾</span>
+              </button>
+              <div class="network-menu hidden" role="listbox"></div>
+            </div>
+            <div class="tab-toolbar-actions">
+              <button id="clearTransactionsBtn" class="btn btn-icon" aria-label="清除交易记录" title="清除交易记录">
+                <svg
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                >
+                  <path d="M3 6h18"></path>
+                  <path d="M8 6V4h8v2"></path>
+                  <path d="M6 6l1 14a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-14"></path>
+                  <path d="M10 11v6"></path>
+                  <path d="M14 11v6"></path>
+                </svg>
+              </button>
+            </div>
+          </div>
+          <div id="transactionList" class="transaction-list">
+            <div class="empty-state">
+              <p>📭</p>
+              <p>暂无交易记录</p>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- 交易详情页面 -->
+      <div id="transactionDetailPage" class="page hidden">
+        <div class="page-header">
+          <button class="back-btn">←</button>
+          <h2>交易详情</h2>
+        </div>
+        <div class="transaction-detail-body">
+          <div class="transaction-detail-card">
+            <div class="detail-row" id="txDetailStatusRow">
+              <div class="detail-label">状态</div>
+              <div class="detail-value tx-status pending" id="txDetailStatus">待确认</div>
+            </div>
+            <div class="detail-row" id="txDetailHashRow">
+              <div class="detail-label">交易哈希</div>
+              <div class="detail-value-row">
+                <div class="detail-value mono" id="txDetailHash"></div>
+                <button type="button" class="detail-copy-icon" id="txDetailCopyHash" aria-label="复制交易哈希">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <rect x="9" y="9" width="13" height="13" rx="2"></rect>
+                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                  </svg>
+                </button>
+              </div>
+            </div>
+            <div class="detail-row" id="txDetailFromRow">
+              <div class="detail-label">发送地址</div>
+              <div class="detail-value-row">
+                <div class="detail-value mono" id="txDetailFrom"></div>
+                <button type="button" class="detail-copy-icon" id="txDetailCopyFrom" aria-label="复制发送地址">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <rect x="9" y="9" width="13" height="13" rx="2"></rect>
+                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                  </svg>
+                </button>
+              </div>
+            </div>
+            <div class="detail-row" id="txDetailToRow">
+              <div class="detail-label">接收地址</div>
+              <div class="detail-value-row">
+                <div class="detail-value mono" id="txDetailTo"></div>
+                <button type="button" class="detail-copy-icon" id="txDetailCopyTo" aria-label="复制接收地址">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <rect x="9" y="9" width="13" height="13" rx="2"></rect>
+                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                  </svg>
+                </button>
+              </div>
+            </div>
+            <div class="detail-row" id="txDetailValueRow">
+              <div class="detail-label">金额</div>
+              <div class="detail-value" id="txDetailValue"></div>
+            </div>
+            <div class="detail-row" id="txDetailTimeRow">
+              <div class="detail-label">发起时间</div>
+              <div class="detail-value" id="txDetailTime"></div>
+            </div>
+            <div class="detail-row" id="txDetailNetworkRow">
+              <div class="detail-label">网络</div>
+              <div class="detail-value" id="txDetailNetwork"></div>
+            </div>
+            <div class="detail-row hidden" id="txDetailConfirmedRow">
+              <div class="detail-label">确认时间</div>
+              <div class="detail-value" id="txDetailConfirmedTime"></div>
+            </div>
+            <div class="detail-row hidden" id="txDetailBlockRow">
+              <div class="detail-label">区块高度</div>
+              <div class="detail-value" id="txDetailBlock"></div>
+            </div>
+            <div class="detail-row hidden" id="txDetailChainRow">
+              <div class="detail-label">链 ID</div>
+              <div class="detail-value" id="txDetailChain"></div>
+            </div>
+            <div class="detail-row hidden" id="txDetailExplorerRow">
+              <div class="detail-label">浏览器</div>
+              <div class="detail-value">
+                <a id="txDetailExplorerLink" class="detail-link" target="_blank" rel="noreferrer">查看交易</a>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 转账页面 -->
+      <div id="transferPage" class="page hidden">
+        <div class="page-header">
+          <button class="back-btn">←</button>
+          <h2>转账</h2>
+        </div>
+        <div class="transfer-body">
+          <div class="form-group">
+            <label>网络</label>
+            <div class="network-selector input-like" data-network-selector="true">
+              <div class="network-dot"></div>
+              <button type="button" class="network-trigger" aria-haspopup="listbox" aria-expanded="false">
+                <span class="network-label"></span>
+                <span class="network-chevron">▾</span>
+              </button>
+              <div class="network-menu hidden" role="listbox"></div>
+            </div>
+          </div>
+          <div class="form-group">
+            <label>通证</label>
+            <div class="token-selector input-like">
+              <button type="button" class="token-trigger" aria-haspopup="listbox" aria-expanded="false">
+                <span class="token-label">原生代币</span>
+                <span class="token-chevron">▾</span>
+              </button>
+              <div class="token-menu hidden" role="listbox"></div>
+            </div>
+          </div>
+          <div class="form-group">
+            <label>发送地址</label>
+            <input
+              type="text"
+              id="senderAddress"
+              placeholder="0x..."
+              class="input"
+              readonly
+            />
+          </div>
+          <div class="form-group">
+            <label>接收地址</label>
+            <div class="contact-selector">
+              <input
+                type="text"
+                id="recipientAddress"
+                class="input contact-input-with-menu"
+                placeholder="0x..."
+              />
+              <button
+                type="button"
+                id="contactSelectorBtn"
+                class="contact-trigger-overlay"
+                aria-haspopup="listbox"
+                aria-expanded="false"
+                aria-label="选择联系人"
+              >
+                <span class="network-chevron">▾</span>
+              </button>
+              <div id="contactMenu" class="network-menu hidden" role="listbox"></div>
+            </div>
+          </div>
+          <div class="form-group">
+            <label>数量 <span id="transferTokenSymbol">(ETH)</span></label>
+            <input
+              type="number"
+              id="amount"
+              placeholder="0.0"
+              step="0.0001"
+              class="input"
+            />
+            <span id="transferMaxHint" class="form-hint"></span>
+          </div>
+          <div class="transfer-fee-row">
+            <span>预计手续费</span>
+            <span id="transferFeeEstimate">-</span>
+          </div>
+        </div>
+        <div class="transfer-footer">
+          <button class="btn btn-primary btn-block" id="sendBtn">发送</button>
+        </div>
+      </div>
+
+      <!-- 设置密码页面（复用于首次创建和账户管理创建） -->
+      <div id="setPasswordPage" class="page hidden">
+        <div class="page-header">
+          <button id="backFromPasswordBtn" class="back-btn hidden">←</button>
+          <h2>夜莺钱包</h2>
+        </div>
+        <div class="create-wallet-body">
+          <p class="info-text" id="setPasswordHint">请填写钱包名称</p>
+
+          <!-- 钱包名称输入 -->
+          <div class="form-group">
+            <label>钱包名称</label>
+            <input
+              type="text"
+              id="setWalletName"
+              placeholder="例如：我的主钱包"
+              value=""
+            />
+          </div>
+
+          <div class="form-group hidden" id="createWalletTypeGroup">
+            <label>钱包类型</label>
+            <div class="network-selector input-like" id="createWalletTypeSelector">
+              <div class="network-dot"></div>
+              <button
+                type="button"
+                class="network-trigger"
+                id="createWalletTypeTrigger"
+                aria-haspopup="listbox"
+                aria-expanded="false"
+              >
+                <span class="network-label" id="createWalletTypeLabel">HD Wallet</span>
+                <span class="network-chevron">▾</span>
+              </button>
+              <div class="network-menu hidden" id="createWalletTypeMenu" role="listbox">
+                <button type="button" class="network-option active" data-wallet-type="hd">HD Wallet</button>
+                <button type="button" class="network-option" data-wallet-type="mpc">MPC Wallet</button>
+              </div>
+            </div>
+            <select id="createWalletTypeSelect" class="hidden">
+              <option value="hd">HD Wallet</option>
+              <option value="mpc">MPC Wallet</option>
+            </select>
+          </div>
+
+          <div id="mpcCreateWalletFields" class="hidden">
+            <div class="form-group">
+              <label>参与者联系人</label>
+              <div class="network-selector input-like mpc-contact-selector" id="mpcCreateParticipantsSelector">
+                <button
+                  type="button"
+                  class="network-trigger"
+                  id="mpcCreateParticipantsTrigger"
+                  aria-haspopup="listbox"
+                  aria-expanded="false"
+                >
+                  <span class="network-label" id="mpcCreateParticipantsLabel">请选择联系人</span>
+                  <span class="network-chevron">▾</span>
+                </button>
+                <div class="network-menu hidden" id="mpcCreateParticipantsMenu" role="listbox"></div>
+              </div>
+              <div id="mpcCreateParticipantsSelected" class="mpc-contact-selected-list hidden"></div>
+            </div>
+            <div class="form-group">
+              <label>门限 (T)</label>
+              <input
+                type="number"
+                id="mpcCreateThresholdInput"
+                class="input"
+                min="2"
+                step="1"
+                placeholder="2"
+              />
+            </div>
+            <details class="mpc-advanced-options">
+              <summary>高级设置</summary>
+              <div class="form-group">
+                <label>协调器地址</label>
+                <input
+                  type="text"
+                  id="mpcCreateCoordinatorEndpointInput"
+                  class="input"
+                  placeholder="https://node.yeying.pub"
+                />
+              </div>
+              <div class="form-group">
+                <label>曲线</label>
+                <select id="mpcCreateCurveSelect" class="input">
+                  <option value="secp256k1">secp256k1</option>
+                  <option value="ed25519">ed25519</option>
+                </select>
+              </div>
+            </details>
+          </div>
+
+        </div>
+
+        <div class="create-wallet-footer">
+          <button id="setPasswordBtn" class="btn btn-primary">创建钱包</button>
+          <button id="cancelPasswordBtn" class="btn btn-secondary">取消</button>
+          <p class="settings-hint hidden" id="mpcCreateWalletResult">-</p>
+        </div>
+      </div>
+
+      <!-- 添加解锁页面 -->
+      <div id="unlockPage" class="page hidden">
+        <h2>解锁钱包</h2>
+        <p class="info-text">会话已过期，请输入密码解锁</p>
+        <div id="unlockReason" class="unlock-reason hidden">
+          <div class="unlock-reason-header">
+            <div class="unlock-reason-title">触发来源</div>
+            <span class="unlock-reason-badge" id="unlockReasonMethodBadge">-</span>
+          </div>
+          <div class="unlock-reason-grid">
+            <div class="unlock-reason-item">
+              <div class="unlock-reason-label">网站</div>
+              <div class="unlock-reason-value" id="unlockReasonOrigin">-</div>
+            </div>
+            <div class="unlock-reason-item">
+              <div class="unlock-reason-label">请求</div>
+              <div class="unlock-reason-value" id="unlockReasonMethod">-</div>
+            </div>
+            <div class="unlock-reason-item">
+              <div class="unlock-reason-label">时间</div>
+              <div class="unlock-reason-value" id="unlockReasonTime">-</div>
+            </div>
+          </div>
+        </div>
+        <div class="form-group">
+          <label>密码:</label>
+          <input type="password" id="unlockPassword" placeholder="输入密码" />
+        </div>
+        <button id="unlockBtn" class="btn btn-primary">解锁</button>
+      </div>
+
+      <!-- 导入钱包页面（复用于首次导入和账户管理导入） -->
+      <div id="importPage" class="page hidden">
+        <div class="page-header">
+          <button id="backFromImportBtn" class="back-btn">←</button>
+          <h2>导入钱包</h2>
+        </div>
+
+        <!-- 导入类型切换 -->
+        <div class="import-tabs">
+          <button class="import-tab active" data-type="mnemonic">助记词</button>
+          <button class="import-tab" data-type="privateKey">私钥</button>
+          <button class="import-tab" data-type="file">备份文件</button>
+        </div>
+
+        <!-- 钱包名称 -->
+        <div class="form-group" id="importWalletNameGroup">
+          <label>钱包名称</label>
+          <input
+            type="text"
+            id="importAccountName"
+            placeholder="例如：导入的钱包"
+          />
+        </div>
+
+        <!-- 助记词导入 -->
+        <div id="mnemonicImportSection">
+          <div class="form-group">
+            <label>助记词</label>
+            <textarea
+              id="importMnemonic"
+              rows="3"
+              placeholder="输入12个助记词，用空格分隔"
+            ></textarea>
+          </div>
+        </div>
+
+        <!-- 私钥导入 -->
+        <div id="privateKeyImportSection" class="hidden">
+          <div class="form-group">
+            <label>私钥</label>
+            <input
+              type="password"
+              id="importPrivateKey"
+              placeholder="输入私钥（0x开头）"
+            />
+          </div>
+        </div>
+
+        <div id="fileImportSection" class="hidden">
+          <div class="form-group">
+            <label for="importAccountsFile">加密账户文件</label>
+            <input id="importAccountsFile" type="file" accept="application/json,.json" />
+          </div>
+        </div>
+
+        <!-- 密码 -->
+        <div class="form-group">
+          <label id="importPasswordLabel">密码</label>
+          <input
+            type="password"
+            id="importWalletPassword"
+            placeholder="至少8位字符"
+          />
+        </div>
+
+        <div class="import-actions">
+          <button id="cancelImportBtn" class="btn btn-secondary">取消</button>
+          <button id="importBtn" class="btn btn-primary">导入钱包</button>
+        </div>
+      </div>
+
+      <!-- 账户管理页面 -->
+      <div id="accountsPage" class="page hidden">
+        <div class="page-header">
+          <button class="back-btn">←</button>
+          <h2>账户管理</h2>
+          <div class="page-actions">
+            <div class="accounts-menu">
+              <button id="accountsMenuBtn" class="btn btn-secondary btn-small btn-icon" type="button" aria-haspopup="menu" aria-expanded="false" title="钱包操作">⋯</button>
+              <div id="accountsMenu" class="network-menu hidden" role="menu">
+                <button type="button" class="network-option" id="accountsCreateWalletBtn">创建钱包</button>
+                <button type="button" class="network-option" id="accountsImportWalletBtn">导入钱包</button>
+                <button type="button" class="network-option" id="accountsExportBtn">导出钱包</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="account-manage-container">
+          <!-- 钱包列表区域（可滚动） -->
+          <div class="wallet-list-wrapper">
+            <div id="walletList" class="wallet-list">
+              <!-- 钱包列表将在这里动态渲染 -->
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- 网络管理页面 -->
+      <div id="networkManagePage" class="page hidden">
+        <div class="page-header">
+          <button class="back-btn">←</button>
+          <h2>网络管理</h2>
+          <div class="page-actions">
+            <button id="networkAddBtn" class="btn btn-primary btn-small">
+              新增网络
+            </button>
+            <div class="page-menu">
+              <button id="networkMenuBtn" class="btn btn-secondary btn-small btn-icon" aria-haspopup="menu" aria-expanded="false" title="更多">
+                ⋯
+              </button>
+              <div id="networkMenu" class="network-menu hidden" role="menu">
+                <button type="button" class="network-option" data-action="import">导入 JSON</button>
+                <button type="button" class="network-option" data-action="export">导出 JSON</button>
+              </div>
+            </div>
+            <input
+              type="file"
+              id="networkImportInput"
+              class="hidden"
+              accept="application/json"
+            />
+          </div>
+        </div>
+
+        <div class="network-list" id="networkManageList"></div>
+      </div>
+
+      <!-- 网络新增/编辑页面 -->
+      <div id="networkFormPage" class="page hidden">
+        <div class="page-header">
+          <button class="back-btn">←</button>
+          <h2 id="networkFormPageTitle">新增网络</h2>
+        </div>
+
+        <input type="hidden" id="networkEditChainId" value="" />
+        <div class="network-form">
+          <div class="form-group">
+            <label>网络名称</label>
+            <input
+              type="text"
+              id="networkNameInput"
+              class="input"
+              placeholder="例如：MyChain"
+            />
+          </div>
+
+          <div class="form-group">
+            <label>RPC URL</label>
+            <input
+              type="text"
+              id="networkRpcInput"
+              class="input"
+              placeholder="https://..."
+            />
+          </div>
+
+          <div class="form-group">
+            <label>Chain ID</label>
+            <input
+              type="text"
+              id="networkChainIdInput"
+              class="input"
+              placeholder="例如：0x1 或 1"
+            />
+          </div>
+
+          <div class="form-group">
+            <label>货币符号</label>
+            <input
+              type="text"
+              id="networkSymbolInput"
+              class="input"
+              placeholder="例如：ETH"
+            />
+          </div>
+
+          <div class="form-group">
+            <label>区块浏览器（可选）</label>
+            <input
+              type="text"
+              id="networkExplorerInput"
+              class="input"
+              placeholder="https://explorer.example.com"
+            />
+          </div>
+
+          <div class="network-form-actions">
+            <button id="saveNetworkBtn" class="btn btn-primary">
+              添加网络
+            </button>
+            <button id="cancelNetworkBtn" class="btn btn-secondary">
+              取消
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 添加通证页面 -->
+      <div id="tokenAddPage" class="page hidden">
+        <div class="page-header">
+          <button class="back-btn">←</button>
+          <h2>添加通证</h2>
+        </div>
+
+        <div class="form-group">
+          <label>网络</label>
+          <div class="network-selector input-like" data-network-selector="true">
+            <div class="network-dot"></div>
+            <button type="button" class="network-trigger" aria-haspopup="listbox" aria-expanded="false">
+                <span class="network-label"></span>
+              <span class="network-chevron">▾</span>
+            </button>
+            <div class="network-menu hidden" role="listbox"></div>
+          </div>
+        </div>
+
+        <div class="token-form">
+          <div class="form-group">
+            <label>合约地址</label>
+            <input
+              type="text"
+              id="tokenAddressInput"
+              class="input"
+              placeholder="0x..."
+            />
+          </div>
+
+          <div class="form-group">
+            <label>通证符号</label>
+            <input
+              type="text"
+              id="tokenSymbolInput"
+              class="input"
+              placeholder="例如：USDT"
+            />
+          </div>
+
+          <div class="form-group">
+            <label>小数位（可选）</label>
+            <input
+              type="number"
+              id="tokenDecimalsInput"
+              class="input"
+              placeholder="18"
+              min="0"
+              max="18"
+            />
+          </div>
+
+          <div class="form-group">
+            <label>通证名称（可选）</label>
+            <input
+              type="text"
+              id="tokenNameInput"
+              class="input"
+              placeholder="例如：Tether USD"
+            />
+          </div>
+
+          <div class="token-form-actions">
+            <button id="saveTokenBtn" class="btn btn-primary">
+              添加通证
+            </button>
+            <button id="cancelTokenBtn" class="btn btn-secondary">
+              取消
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 账户详情页面 -->
+      <div id="accountDetailPage" class="page hidden">
+        <div class="page-header">
+          <button class="back-btn">←</button>
+          <h2>账户详情</h2>
+        </div>
+
+        <div class="account-detail-card">
+          <div class="account-detail-avatar" id="accountDetailAvatar"></div>
+          <div class="account-detail-summary">
+            <div class="account-detail-name-row" id="accountDetailNameRow">
+              <div class="account-detail-name" id="accountDetailNameText" title="点击修改"></div>
+              <span class="account-detail-index" id="accountDetailIndex"></span>
+              <button class="detail-icon-btn" id="editAccountNameBtn" title="编辑名称" aria-label="编辑名称">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M12 20h9"></path>
+                  <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"></path>
+                </svg>
+              </button>
+            </div>
+            <div class="account-detail-name-edit hidden" id="accountDetailNameEdit">
+              <input id="accountDetailNameInput" class="input" type="text" maxlength="20" placeholder="输入账户名称" />
+              <div class="account-detail-name-actions">
+                <button id="saveAccountNameBtn" class="btn btn-primary btn-small">保存</button>
+                <button id="cancelAccountNameBtn" class="btn btn-secondary btn-small">取消</button>
+              </div>
+            </div>
+            <div class="account-detail-address-row">
+              <div class="account-detail-address" id="accountDetailAddress" title="点击复制地址"></div>
+              <button class="detail-icon-btn" id="copyAccountAddressBtn" title="复制地址" aria-label="复制地址">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <rect x="9" y="9" width="13" height="13" rx="2"></rect>
+                  <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                </svg>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div class="account-detail-qr-actions">
+          <div class="account-detail-qr-size">
+            <label for="accountDetailQrSize">二维码大小</label>
+            <select id="accountDetailQrSize" class="input">
+              <option value="120">小</option>
+              <option value="160" selected>中</option>
+              <option value="200">大</option>
+              <option value="240">特大</option>
+            </select>
+          </div>
+          <button id="exportAccountQrBtn" class="btn btn-secondary btn-small">
+            导出二维码
+          </button>
+        </div>
+        <div class="account-detail-qr">
+          <div id="accountDetailQr"></div>
+        </div>
+      </div>
+
+      <!-- 设置页面 -->
+      <div id="settingsPage" class="page hidden">
+        <div class="page-header">
+          <button id="settingsBackBtn" class="back-btn">←</button>
+          <h2>设置</h2>
+        </div>
+
+        <div class="settings-body">
+          <div class="settings-section" id="walletIdentitySettingsSection">
+            <div class="wallet-identity-heading">
+              <h3>🪪 钱包身份</h3>
+              <span id="walletIdentityStatusIcon" class="wallet-identity-status pending" role="img" aria-label="待验证" title="待验证"></span>
+            </div>
+            <p class="wallet-identity-description">创建一次钱包身份并完成验证后，后续 Web3 应用可在你的授权下复用用户名和邮箱等资料，减少重复验证，让登录和使用更顺畅。</p>
+            <p id="walletIdentityStatusText" class="settings-hint"></p>
+            <div class="settings-row">
+              <button id="walletIdentityVerifyBtn" class="btn btn-primary btn-small btn-block">验证</button>
+              <button id="viewWalletIdentityBtn" class="btn btn-secondary btn-small btn-block hidden" type="button">查看详情</button>
+            </div>
+            <p id="walletIdentityEmailStatusText" class="settings-hint"></p>
+          </div>
+          <!-- 账户安全 -->
+          <div class="settings-section">
+            <h3>🔐 账户安全</h3>
+            <p class="settings-hint security-card-description">本地密码用于加密此设备上的钱包数据。请自行妥善保管，钱包无法找回或重置该密码；遗忘后只能重置钱包并从已备份的资料恢复。</p>
+            <button id="changePasswordBtn" class="btn btn-primary btn-small btn-block" type="button">修改密码</button>
+          </div>
+
+          <div class="settings-section settings-section-danger">
+            <h3>⚠️ 重置钱包</h3>
+            <p class="settings-hint security-card-description">此操作会删除本机钱包、钱包身份和相关本地数据。请先确认已备份必要密钥。</p>
+            <button id="resetWalletBtn" class="btn btn-danger btn-small btn-block" type="button">重置钱包</button>
+          </div>
+
+          <!-- 数据备份 -->
+          <div class="settings-section" id="backupSyncSection">
+            <div class="settings-section-heading">
+              <h3>☁️ 数据备份</h3>
+              <div class="settings-section-heading-actions">
+                <button id="backupSyncNowBtn" class="settings-heading-icon-btn hidden" type="button" aria-label="立即备份" title="立即备份">
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M21 12a9 9 0 1 1-2.64-6.36"></path>
+                    <path d="M21 3v6h-6"></path>
+                  </svg>
+                </button>
+                <label class="settings-toggle settings-section-toggle" title="启用数据备份">
+                  <input type="checkbox" id="backupSyncEnabledToggle" />
+                  <span class="settings-switch" aria-hidden="true"></span>
+                  <span class="sr-only">启用数据备份</span>
+                </label>
+                <button id="backupSyncConflictBtn" class="btn btn-danger btn-small hidden" type="button">冲突</button>
+              </div>
+            </div>
+            <p class="settings-hint settings-card-description">将钱包数据加密备份到你选择的服务，便于在新设备恢复；备份不会替代助记词或私钥备份。</p>
+            <button id="backupSyncDetailBtn" class="btn btn-secondary btn-small btn-block" type="button">查看详情</button>
+          </div>
+
+          <!-- 日志审计 -->
+          <div class="settings-section hidden" id="backupSyncAuditSection">
+            <h3>🔎 日志审计</h3>
+            <div class="settings-row">
+              <button id="backupSyncAuditHiddenBtn" class="btn btn-secondary">进入日志审计</button>
+            </div>
+            <p class="settings-hint">查看同步日志，支持搜索与翻页</p>
+          </div>
+
+          <!-- 密钥托管 -->
+          <div class="settings-section" id="custodySettingsSection">
+            <div class="settings-section-heading">
+              <h3>🛡️ 密钥托管</h3>
+              <div class="settings-section-heading-actions">
+                <label class="settings-toggle settings-section-toggle" title="启用密钥托管">
+                  <input type="checkbox" id="custodyEnabledToggle" />
+                  <span class="settings-switch" aria-hidden="true"></span>
+                  <span class="sr-only">启用密钥托管</span>
+                </label>
+              </div>
+            </div>
+            <p class="settings-hint settings-card-description">由受信服务协助保存加密恢复资料，便于恢复和跨设备使用；服务不能直接获得你的明文私钥。</p>
+            <button id="custodyDetailBtn" class="btn btn-secondary btn-small btn-block" type="button">查看详情</button>
+          </div>
+
+          <!-- 多签钱包设置 -->
+          <div class="settings-section" id="mpcSettingsSection">
+            <h3>🧩 多签钱包</h3>
+            <p class="settings-hint settings-card-description">与其他成员共同管理钱包，达到设定门限后才能完成关键操作；待处理邀请会集中显示在多签活动中。</p>
+            <p class="settings-hint" id="mpcSettingsSummary">默认协调器：https://node.yeying.pub</p>
+            <p class="settings-hint hidden" id="mpcSettingsInviteHint"></p>
+            <div class="settings-row settings-action-grid">
+              <button id="mpcDetailBtn" class="btn btn-secondary btn-small" type="button">查看详情</button>
+              <button id="mpcSettingsActivityBtn" class="btn btn-secondary btn-small" type="button">多签活动</button>
+            </div>
+          </div>
+
+          <!-- MPC 会话操作（开发者排障） -->
+          <div class="settings-section hidden" id="mpcKeygenSection">
+            <h3>🔐 MPC 会话</h3>
+            <h4>加入会话</h4>
+            <div class="form-group">
+              <label>Session ID</label>
+              <input
+                type="text"
+                id="mpcJoinSessionIdInput"
+                class="input"
+                placeholder="sess_..."
+              />
+            </div>
+            <div class="form-group">
+              <label>Participant ID</label>
+              <input
+                type="text"
+                id="mpcJoinParticipantIdInput"
+                class="input"
+                placeholder="p1"
+              />
+            </div>
+            <div class="form-group">
+              <label>身份 (DID)</label>
+              <input
+                type="text"
+                id="mpcJoinIdentityInput"
+                class="input"
+                placeholder="did:pkh:eth:0x..."
+              />
+            </div>
+            <div class="settings-row">
+              <button id="mpcJoinSessionBtn" class="btn btn-secondary btn-small">加入会话并监听</button>
+              <button id="mpcStopStreamBtn" class="btn btn-secondary btn-small">停止监听</button>
+            </div>
+            <p class="settings-hint" id="mpcJoinSessionResult">-</p>
+
+            <div class="settings-divider"></div>
+            <h4>发送消息</h4>
+            <div class="form-group">
+              <label>Session ID</label>
+              <input
+                type="text"
+                id="mpcSendSessionIdInput"
+                class="input"
+                placeholder="sess_..."
+              />
+            </div>
+            <div class="form-group">
+              <label>From (Participant ID)</label>
+              <input
+                type="text"
+                id="mpcSendFromInput"
+                class="input"
+                placeholder="p1"
+              />
+            </div>
+            <div class="form-group">
+              <label>To (Participant ID, 可选)</label>
+              <input
+                type="text"
+                id="mpcSendToInput"
+                class="input"
+                placeholder="p2"
+              />
+            </div>
+            <div class="form-group">
+              <label>Recipient E2E 公钥（可选）</label>
+              <input
+                type="text"
+                id="mpcSendRecipientKeyInput"
+                class="input"
+                placeholder="x25519:base64..."
+              />
+            </div>
+            <div class="form-group">
+              <label>消息类型</label>
+              <input
+                type="text"
+                id="mpcSendTypeInput"
+                class="input"
+                placeholder="keygen_round_1"
+              />
+            </div>
+            <div class="form-group">
+              <label>Round</label>
+              <input
+                type="number"
+                id="mpcSendRoundInput"
+                class="input"
+                min="0"
+                step="1"
+                placeholder="1"
+              />
+            </div>
+            <div class="form-group">
+              <label>Seq</label>
+              <input
+                type="number"
+                id="mpcSendSeqInput"
+                class="input"
+                min="0"
+                step="1"
+                placeholder="1"
+              />
+            </div>
+            <div class="form-group">
+              <label>Payload (JSON)</label>
+              <textarea
+                id="mpcSendPayloadInput"
+                class="input"
+                placeholder="{\"step\":1}"
+              ></textarea>
+            </div>
+            <div class="settings-row">
+              <button id="mpcSendMessageBtn" class="btn btn-primary btn-small">发送消息</button>
+            </div>
+            <p class="settings-hint" id="mpcSendMessageResult">-</p>
+
+            <div class="settings-divider"></div>
+            <h4>消息收件箱</h4>
+            <div class="settings-row">
+              <button id="mpcMessagesPollStartBtn" class="btn btn-secondary btn-small">开始轮询</button>
+              <button id="mpcMessagesPollStopBtn" class="btn btn-secondary btn-small">停止轮询</button>
+            </div>
+            <p class="settings-hint" id="mpcMessagesPollStatus">未开始轮询</p>
+            <div id="mpcMessagesList" class="sync-activity-list sync-log-list">
+              <div class="empty-message">暂无消息</div>
+            </div>
+            <div class="settings-divider"></div>
+            <h4>消息详情</h4>
+            <p class="settings-hint" id="mpcMessageDetailStatus">-</p>
+            <textarea id="mpcMessageDetailPayload" class="input" readonly placeholder="解密后的 payload 会显示在这里"></textarea>
+          </div>
+
+        </div>
+      </div>
+
+      <div id="walletIdentityDetailPage" class="page hidden">
+        <div class="page-header"><button id="walletIdentityDetailBackBtn" class="back-btn" type="button">←</button><h2>钱包身份详情</h2></div>
+        <div class="settings-body wallet-identity-details">
+          <p class="settings-card-description">钱包身份用于在受支持的社区应用中复用你的验证资料。地址、用户名和邮箱会作为同一身份关联进行管理。</p>
+          <div class="detail-row"><span class="detail-label">身份服务</span><span class="detail-value" id="walletIdentityDetailEndpointPage">-</span></div>
+          <div class="detail-row"><span class="detail-label">状态</span><span class="detail-value" id="walletIdentityDetailStatusPage">-</span></div>
+          <div class="detail-row"><span class="detail-label">用户名</span><span class="detail-value" id="walletIdentityDetailUsernamePage">-</span></div>
+          <div class="detail-row"><span class="detail-label">邮箱</span><span class="detail-value" id="walletIdentityDetailEmailPage">-</span></div>
+          <div class="detail-row">
+            <span class="detail-label">头像</span>
+            <span class="detail-value identity-avatar-value" id="walletIdentityDetailAvatarPage">
+              <img id="walletIdentityDetailAvatarImagePage" class="identity-avatar-preview" alt="钱包身份头像" />
+            </span>
+          </div>
+          <div class="detail-row"><span class="detail-label">钱包地址</span><span class="detail-value copyable-detail-value compact-identity-value" id="walletIdentityDetailAddressPage">-</span></div>
+          <div class="detail-row"><span class="detail-label">身份 DID</span><span class="detail-value copyable-detail-value compact-identity-value" id="walletIdentityDetailDidPage">-</span></div>
+          <div class="detail-row identity-management-row">
+            <span class="detail-label">通行证</span>
+            <button class="detail-value identity-management-link" id="manageWalletIdentityPasskeysBtn" type="button">
+              <span id="walletIdentityPasskeySummaryPage">正在加载通行证状态...</span>
+            </button>
+          </div>
+          <div class="detail-row identity-management-row">
+            <span class="detail-label">认证器</span>
+            <button class="detail-value identity-management-link" id="manageWalletIdentityAuthenticatorsBtn" type="button">
+              <span id="walletIdentityTotpSummaryPage">正在加载认证器状态...</span>
+            </button>
+          </div>
+        </div>
+        <div class="identity-detail-footer identity-detail-actions">
+          <button id="changeWalletIdentityPageBtn" class="btn btn-secondary">变更资料</button>
+          <button id="clearWalletIdentityVerificationBtn" class="btn btn-secondary">清除本地验证状态</button>
+        </div>
+      </div>
+
+      <div id="walletIdentityPasskeyPage" class="page hidden">
+        <div class="page-header"><button id="walletIdentityPasskeyBackBtn" class="back-btn" type="button">←</button><h2>通行证</h2></div>
+        <div class="settings-body wallet-identity-details">
+          <p class="settings-card-description">通行证用于无钱包插件登录和高风险确认，绑定到钱包身份 DID，不绑定单个钱包地址。</p>
+          <div class="identity-passkey-section">
+            <div class="identity-passkey-header">
+              <div>
+                <h3>已注册通行证</h3>
+                <p id="walletIdentityPasskeyStatusPage" class="settings-hint">正在加载通行证...</p>
+              </div>
+              <button id="refreshWalletIdentityPasskeysBtn" class="settings-heading-icon-btn" type="button" aria-label="刷新通行证" title="刷新通行证">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M21 12a9 9 0 1 1-2.64-6.36"></path>
+                  <path d="M21 3v6h-6"></path>
+                </svg>
+              </button>
+            </div>
+            <div id="walletIdentityPasskeyListPage" class="identity-passkey-list"></div>
+          </div>
+        </div>
+        <div class="identity-passkey-footer identity-detail-actions">
+          <button id="registerWalletIdentityPasskeyBtn" class="btn btn-primary">注册通行证</button>
+        </div>
+      </div>
+
+      <div id="walletIdentityAuthenticatorPage" class="page hidden">
+        <div class="page-header"><button id="walletIdentityAuthenticatorBackBtn" class="back-btn" type="button">←</button><h2>验证器</h2></div>
+        <div class="settings-body wallet-identity-details">
+          <p class="settings-card-description">验证器用于钱包身份安全确认。当前支持 TOTP 一次性验证码，后续可扩展更多认证器。</p>
+          <div class="identity-passkey-section">
+            <div class="identity-passkey-header">
+              <div>
+                <h3>TOTP 验证器</h3>
+                <p id="walletIdentityTotpStatusPage" class="settings-hint">用于一次性验证码确认，可选启用。</p>
+              </div>
+              <button id="refreshWalletIdentityTotpBtn" class="settings-heading-icon-btn" type="button" aria-label="刷新验证器" title="刷新验证器">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M21 12a9 9 0 1 1-2.64-6.36"></path>
+                  <path d="M21 3v6h-6"></path>
+                </svg>
+              </button>
+            </div>
+            <div id="walletIdentityTotpSetupPage" class="identity-totp-setup hidden">
+              <div class="identity-totp-qr" id="walletIdentityTotpQrPage"></div>
+              <div class="identity-totp-secret" id="walletIdentityTotpSecretPage"></div>
+              <div class="identity-totp-uri" id="walletIdentityTotpUriPage"></div>
+              <div class="identity-totp-actions">
+                <input id="walletIdentityTotpCodeInput" class="settings-input" inputmode="numeric" autocomplete="one-time-code" maxlength="10" placeholder="6 位验证码">
+                <button id="confirmWalletIdentityTotpBtn" class="btn btn-primary btn-small" type="button">确认</button>
+              </div>
+            </div>
+            <div class="identity-totp-actions">
+              <button id="setupWalletIdentityTotpBtn" class="btn btn-secondary btn-small" type="button">启用 TOTP</button>
+              <button id="revokeWalletIdentityTotpBtn" class="btn btn-danger btn-small hidden" type="button">撤销 TOTP</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div id="walletIdentityEditPage" class="page hidden">
+        <div class="page-header">
+          <button class="back-btn" id="walletIdentityEditBackBtn" type="button">←</button>
+          <h2>变更验证资料</h2>
+        </div>
+        <div class="settings-body wallet-identity-details">
+          <p class="settings-card-description">选择地址并填写用户名、邮箱和头像 URI，确认后将向邮箱发送验证码。</p>
+          <div class="form-group"><label for="walletIdentityEditEndpoint">身份服务地址</label><input id="walletIdentityEditEndpoint" class="input" type="url" autocomplete="url" /></div>
+          <div class="form-group"><label for="walletIdentityEditAddress">钱包地址</label><select id="walletIdentityEditAddress" class="input"></select></div>
+          <div class="form-group"><label for="walletIdentityEditUsername">用户名</label><input id="walletIdentityEditUsername" class="input" autocomplete="username" /></div>
+          <div class="form-group"><label for="walletIdentityEditEmail">邮箱</label><input id="walletIdentityEditEmail" class="input" type="email" autocomplete="email" /></div>
+          <div class="form-group"><label for="walletIdentityEditAvatar">头像 URI</label><input id="walletIdentityEditAvatar" class="input" type="url" autocomplete="url" placeholder="自动生成，也可填写 https://... 或 ipfs://..." /></div>
+        </div>
+        <div class="identity-edit-footer identity-detail-actions">
+          <button id="confirmWalletIdentityEditBtn" class="btn btn-primary" type="button">验证</button>
+          <button id="cancelWalletIdentityEditBtn" class="btn btn-secondary" type="button">取消</button>
+        </div>
+      </div>
+      <div id="walletIdentityClearVerificationModal" class="modal hidden">
+        <div class="modal-overlay"></div>
+        <div class="modal-content">
+          <div class="modal-header"><h3>清除本地验证状态</h3><button class="btn-close" id="closeWalletIdentityClearVerificationModal" type="button">✕</button></div>
+          <div class="modal-body"><p>此操作只清除当前设备的本地验证状态和未完成的验证码会话。</p><p>不会删除钱包身份、撤销身份凭证、解除钱包账户关联，也不会影响通行证和 TOTP。</p></div>
+          <div class="modal-footer"><button id="confirmWalletIdentityClearVerificationBtn" class="btn btn-secondary">确认清除</button><button id="cancelWalletIdentityClearVerificationBtn" class="btn btn-secondary">取消</button></div>
+        </div>
+      </div>
+
+      <!-- 同步日志审计页面 -->
+      <div id="backupSyncLogsPage" class="page hidden">
+        <div class="page-header">
+          <button class="back-btn">←</button>
+          <h2>日志审计</h2>
+          <div class="page-actions">
+            <button id="backupSyncClearLogsBtn" class="btn btn-secondary btn-small">
+              清空日志
+            </button>
+          </div>
+        </div>
+        <div class="sync-log-toolbar">
+          <input
+            type="text"
+            id="backupSyncLogsSearchInput"
+            class="input"
+            placeholder="搜索日志（关键字/动作/原因）"
+          />
+        </div>
+        <div class="sync-log-config">
+          <div class="form-group">
+            <label>最大保留条数</label>
+            <input
+              type="number"
+              id="backupSyncLogMaxInput"
+              class="input"
+              min="50"
+              max="100000"
+              step="50"
+              placeholder="100000"
+            />
+          </div>
+          <div class="form-group">
+            <label>保留天数</label>
+            <input
+              type="number"
+              id="backupSyncLogRetentionInput"
+              class="input"
+              min="1"
+              max="365"
+              step="1"
+              placeholder="30"
+            />
+          </div>
+        </div>
+        <div class="settings-row sync-log-config-actions">
+          <button id="backupSyncLogRetentionSaveBtn" class="btn btn-secondary btn-small">
+            保存留存策略
+          </button>
+        </div>
+        <h3 class="sync-log-title">同步日志</h3>
+        <div id="backupSyncLogsList" class="sync-activity-list sync-log-list">
+          <div class="empty-message">暂无日志</div>
+        </div>
+        <div id="backupSyncLogsFooter" class="sync-log-footer hidden"></div>
+      </div>
+
+      <!-- 多签活动页面 -->
+      <div id="mpcLogsPage" class="page hidden">
+        <div class="page-header">
+          <button class="back-btn">←</button>
+          <h2>多签活动</h2>
+          <div class="page-actions"></div>
+        </div>
+        <p class="settings-hint">查看这台设备参与的多签钱包创建、邀请和会话状态。</p>
+        <div class="sync-activity-header">
+          <h3 class="sync-log-title">最近活动</h3>
+          <button id="mpcInvitesRefreshBtn" class="settings-heading-icon-btn" type="button" aria-label="刷新多签活动" title="刷新多签活动">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M21 12a9 9 0 1 1-2.64-6.36"></path>
+              <path d="M21 3v6h-6"></path>
+            </svg>
+          </button>
+        </div>
+        <div id="mpcLogsList" class="sync-activity-list sync-log-list">
+          <div class="empty-message">暂无多签活动</div>
+        </div>
+      </div>
+
+      <!-- MPC 钱包详情页面 -->
+      <div id="mpcWalletDetailPage" class="page hidden">
+        <div class="page-header">
+          <button class="back-btn">←</button>
+          <h2>MPC 钱包详情</h2>
+          <div class="page-actions">
+            <button class="settings-heading-icon-btn" id="refreshMpcWalletDetailBtn" type="button" aria-label="刷新 MPC 钱包详情" title="刷新">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M21 12a9 9 0 1 1-2.64-6.36"></path>
+                <path d="M21 3v6h-6"></path>
+              </svg>
+            </button>
+          </div>
+        </div>
+        <div class="mpc-wallet-detail-page-body">
+          <div class="detail-row">
+            <div class="detail-label">名称</div>
+            <div class="detail-value" id="mpcWalletDetailName">-</div>
+          </div>
+          <div class="detail-row">
+            <div class="detail-label">地址</div>
+            <div class="detail-value-row mpc-wallet-address-value">
+              <div class="detail-value" id="mpcWalletDetailAddress">-</div>
+              <button type="button" class="detail-copy-icon hidden" id="mpcWalletDetailCopyAddressBtn" aria-label="复制 MPC 钱包地址" title="复制地址">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <rect x="9" y="9" width="13" height="13" rx="2"></rect>
+                  <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                </svg>
+              </button>
+            </div>
+          </div>
+          <div class="detail-row">
+            <div class="detail-label">状态</div>
+            <div class="detail-value" id="mpcWalletDetailStatus">-</div>
+          </div>
+          <div class="detail-row">
+            <div class="detail-label">签名能力</div>
+            <div class="detail-value" id="mpcWalletDetailSigningStatus">-</div>
+          </div>
+          <div class="detail-row">
+            <div class="detail-label">门限</div>
+            <div class="detail-value" id="mpcWalletDetailThreshold">-</div>
+          </div>
+          <div class="detail-row mpc-participants-row">
+            <div class="detail-label">参与者</div>
+            <div class="detail-value" id="mpcWalletDetailParticipants">-</div>
+          </div>
+          <h4 class="mpc-wallet-detail-session-title">会话记录</h4>
+          <div id="mpcWalletDetailSessions" class="sync-activity-list">
+            <div class="empty-message">暂无会话</div>
+          </div>
+          <div class="mpc-wallet-detail-footer">
+            <button id="prepareMpcWalletSigningBtn" class="btn btn-secondary hidden">重试签名准备</button>
+            <button id="cancelMpcWalletCreationBtn" class="btn btn-danger hidden">取消创建</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 同步冲突处理 -->
+      <div id="backupSyncConflictModal" class="modal hidden">
+        <div class="modal-overlay"></div>
+        <div class="modal-content">
+          <div class="modal-header">
+            <h3>同步冲突</h3>
+            <button class="btn-close" id="closeBackupSyncConflictModal">✕</button>
+          </div>
+          <div class="modal-body">
+            <div id="backupSyncConflictsList" class="sync-conflicts-list"></div>
+          </div>
+          <div class="modal-footer">
+            <button id="cancelBackupSyncConflictBtn" class="btn btn-secondary">关闭</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 数据备份服务配置 -->
+      <div id="backupSyncDetailPage" class="page hidden">
+          <div class="page-header">
+            <button class="back-btn" type="button">←</button>
+            <h2>数据备份</h2>
+          </div>
+          <div class="settings-body">
+            <p class="settings-card-description">备份会同步账户名称、联系人、网络和钱包配置等加密资料。新设备需先恢复助记词或私钥，再通过备份恢复这些资料。</p>
+            <div class="settings-detail-list settings-summary-list">
+              <div class="settings-detail-row">
+                <span>备份服务：</span>
+                <span id="backupSyncEndpointValue">-</span>
+              </div>
+              <div class="settings-detail-row">
+                <span>认证方式：</span>
+                <span id="backupSyncAuthModeValue">-</span>
+              </div>
+              <div class="settings-detail-row">
+                <span>连接状态：</span>
+                <span id="backupSyncConnectionStatus">未启用</span>
+              </div>
+              <div class="settings-detail-row">
+                <span>最近拉取：</span>
+                <span id="backupSyncLastPullValue">-</span>
+              </div>
+              <div class="settings-detail-row">
+                <span>最近推送：</span>
+                <span id="backupSyncLastPushValue">-</span>
+              </div>
+            </div>
+            <div class="settings-row settings-action-grid">
+              <button id="backupSyncConfigBtn" class="btn btn-secondary btn-small">高级设置</button>
+              <button id="backupSyncAuditBtn" class="btn btn-secondary btn-small">日志审计</button>
+            </div>
+            <button id="backupSyncClearRemoteBtn" class="btn btn-danger btn-small btn-block" type="button">清除远端备份</button>
+            <div id="backupSyncDebugRow" class="settings-row hidden">
+              <button id="backupSyncSimulateConflictBtn" class="btn btn-secondary btn-small">模拟冲突</button>
+            </div>
+          </div>
+      </div>
+
+      <!-- 密钥托管详情 -->
+      <div id="custodyDetailPage" class="page hidden">
+          <div class="page-header">
+            <button class="back-btn" type="button">←</button>
+            <h2>密钥托管</h2>
+          </div>
+          <div class="settings-body">
+            <p class="settings-card-description">密钥托管会把加密后的恢复资料交给受信服务，方便你在新设备恢复钱包；服务不会看到你的明文私钥。</p>
+            <div class="custody-summary" aria-live="polite">
+              <div class="custody-summary-row"><span>托管服务</span><span class="custody-summary-value" id="custodyServiceName">夜莺密钥托管服务</span></div>
+              <div class="custody-summary-row"><span>当前状态</span><span class="custody-summary-value" id="custodyStatusText">尚未配置</span></div>
+              <div class="custody-summary-row"><span>通行证</span><span class="custody-summary-value" id="custodyPasskeyStatus">未检查</span></div>
+              <div class="custody-summary-row"><span>托管记录</span><span class="custody-summary-value" id="custodyRecordSummary">暂无记录</span></div>
+              <div class="custody-summary-row"><span>最近同步</span><span class="custody-summary-value" id="custodyLastSyncSummary">从未同步</span></div>
+            </div>
+            <div class="settings-row settings-action-grid">
+              <button id="custodySyncBtn" class="btn btn-primary btn-small">立即同步</button>
+              <button id="custodyConfigBtn" class="btn btn-secondary btn-small">高级设置</button>
+            </div>
+          </div>
+      </div>
+
+      <!-- 多签钱包详情 -->
+      <div id="mpcDetailPage" class="page hidden">
+          <div class="page-header">
+            <button class="back-btn" type="button">←</button>
+            <h2>多签钱包</h2>
+          </div>
+          <div class="settings-body">
+            <p class="settings-card-description">多签钱包通过当前设备与协调器及其他成员安全协作。这里显示这台设备的连接信息；同一设备创建或加入的多签钱包会使用同一套设备身份。</p>
+            <div class="settings-detail-list settings-summary-list">
+              <div class="settings-detail-row">
+                <span>协调器服务：</span>
+                <span id="mpcCoordinatorEndpointValue">-</span>
+              </div>
+              <div class="settings-detail-row">
+                <span>设备状态：</span>
+                <span id="mpcDeviceStatusValue">正在准备</span>
+              </div>
+              <div class="settings-detail-row">
+                <span>设备 ID：</span>
+                <code id="mpcDeviceIdText">-</code>
+              </div>
+              <div class="settings-detail-row">
+                <span>签名公钥：</span>
+                <code id="mpcDeviceSigningKeyText">-</code>
+              </div>
+              <div class="settings-detail-row">
+                <span>E2E 公钥：</span>
+                <code id="mpcDeviceE2eKeyText">-</code>
+              </div>
+            </div>
+            <div class="settings-row settings-action-grid">
+              <button id="mpcServiceConfigBtn" class="btn btn-secondary btn-small">高级设置</button>
+              <button id="mpcAuditBtn" class="btn btn-secondary btn-small">多签活动</button>
+            </div>
+          </div>
+      </div>
+
+      <!-- 数据备份服务配置 -->
+      <div id="backupSyncConfigModal" class="modal hidden">
+        <div class="modal-overlay"></div>
+        <div class="modal-content">
+          <div class="modal-header">
+            <h3>数据备份配置</h3>
+            <button class="btn-close" id="closeBackupSyncConfigModal">✕</button>
+          </div>
+          <div class="modal-body">
+            <div class="form-group">
+              <label for="backupSyncEndpointInput">备份服务地址</label>
+              <input type="url" id="backupSyncEndpointInput" class="input" placeholder="https://warehouse.tidukongjian.com/dav" />
+            </div>
+            <div class="form-group">
+              <label for="backupSyncAuthModeSelect">认证方式</label>
+              <select id="backupSyncAuthModeSelect" class="input">
+                <option value="ucan">钱包授权</option>
+                <option value="basic">用户名和密码</option>
+              </select>
+            </div>
+            <div id="backupSyncBasicPanel" class="hidden">
+              <div class="form-group">
+                <label for="backupSyncUsernameInput">用户名</label>
+                <input type="text" id="backupSyncUsernameInput" class="input" autocomplete="username" />
+              </div>
+              <div class="form-group">
+                <label for="backupSyncPasswordInput">密码</label>
+                <input type="password" id="backupSyncPasswordInput" class="input" autocomplete="current-password" />
+              </div>
+              <p class="settings-hint">请输入备份服务提供的用户名和密码。</p>
+            </div>
+            <p id="backupSyncUcanHint" class="settings-hint">使用钱包授权访问备份服务，无需填写用户名和密码。</p>
+          </div>
+          <div class="modal-footer">
+            <button id="backupSyncConfigSaveBtn" class="btn btn-primary">保存</button>
+            <button id="cancelBackupSyncConfigBtn" class="btn btn-secondary">取消</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 密钥托管服务配置 -->
+      <div id="custodyConfigModal" class="modal hidden">
+        <div class="modal-overlay"></div>
+        <div class="modal-content">
+          <div class="modal-header">
+            <h3>密钥托管配置</h3>
+            <button class="btn-close" id="closeCustodyConfigModal">✕</button>
+          </div>
+          <div class="modal-body">
+            <div class="form-group">
+              <label>托管服务地址</label>
+              <input
+                type="url"
+                id="custodyEndpointInput"
+                class="input"
+                placeholder="https://node.yeying.pub"
+              />
+            </div>
+            <p class="settings-hint">普通用户只需要确认托管服务地址，其他授权参数由钱包自动管理。</p>
+          </div>
+          <div class="modal-footer">
+            <button id="custodySaveBtn" class="btn btn-primary">保存配置</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 多签钱包高级设置 -->
+      <div id="mpcServiceConfigModal" class="modal hidden">
+        <div class="modal-overlay"></div>
+        <div class="modal-content">
+          <div class="modal-header">
+            <h3>多签钱包高级设置</h3>
+            <button class="btn-close" id="closeMpcServiceConfigModal">✕</button>
+          </div>
+          <div class="modal-body">
+            <div class="form-group">
+              <label for="mpcCoordinatorEndpointInput">协调器服务地址</label>
+              <input type="url" id="mpcCoordinatorEndpointInput" class="input" placeholder="https://node.yeying.pub" />
+            </div>
+            <p class="settings-hint">更换服务只会影响后续创建或加入多签钱包时使用的协调器。</p>
+          </div>
+          <div class="modal-footer">
+            <button id="mpcCoordinatorSaveBtn" class="btn btn-primary">保存</button>
+            <button id="cancelMpcServiceConfigBtn" class="btn btn-secondary">取消</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 网站管理页面 -->
+      <div id="sitesPage" class="page hidden">
+        <div class="page-header">
+          <button class="back-btn">←</button>
+          <h2>网站管理</h2>
+          <div class="page-actions">
+            <button id="clearAllAuthBtn" class="btn btn-danger btn-small">
+              清除所有授权
+            </button>
+          </div>
+        </div>
+        <div class="sites-body">
+          <div class="sites-search">
+            <input
+              type="text"
+              id="siteSearchInput"
+              class="input"
+              placeholder="搜索网站（域名或地址）"
+            />
+          </div>
+          <div id="authorizedSitesList">
+            <div class="empty-message">正在加载...</div>
+          </div>
+          <p class="settings-hint">只保留你信任的网站授权。</p>
+        </div>
+      </div>
+
+      <!-- 网站授权详情 -->
+      <div id="siteDetailModal" class="modal hidden">
+        <div class="modal-overlay"></div>
+        <div class="modal-content">
+          <div class="modal-header">
+            <h3>授权详情</h3>
+            <button class="btn-close" id="closeSiteDetailModal">✕</button>
+          </div>
+          <div class="modal-body site-detail-body">
+            <div class="detail-row">
+              <div class="detail-label">网站</div>
+              <div class="detail-value" id="siteDetailOrigin"></div>
+            </div>
+            <div class="detail-row">
+              <div class="detail-label">地址</div>
+              <div class="detail-value mono" id="siteDetailAddress"></div>
+            </div>
+            <div class="detail-row">
+              <div class="detail-label">授权时间</div>
+              <div class="detail-value" id="siteDetailTime"></div>
+            </div>
+            <div class="site-detail-section-title">UCAN 会话</div>
+            <div id="siteDetailUcanEmpty" class="site-detail-empty">暂无 UCAN 会话</div>
+            <div id="siteDetailUcanRows" class="site-detail-ucan hidden">
+              <div class="detail-row">
+                <div class="detail-label">状态</div>
+                <div class="detail-value" id="siteDetailUcanStatus"></div>
+              </div>
+              <div class="detail-row">
+                <div class="detail-label">Session</div>
+                <div class="detail-value mono" id="siteDetailUcanSession"></div>
+              </div>
+              <div class="detail-row">
+                <div class="detail-label">DID</div>
+                <div class="detail-value mono" id="siteDetailUcanDid"></div>
+              </div>
+              <div class="detail-row">
+                <div class="detail-label">创建时间</div>
+                <div class="detail-value" id="siteDetailUcanCreated"></div>
+              </div>
+              <div class="detail-row">
+                <div class="detail-label">过期时间</div>
+                <div class="detail-value" id="siteDetailUcanExpires"></div>
+              </div>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button id="revokeSiteDetailBtn" class="btn btn-danger">撤销授权</button>
+            <button id="closeSiteDetailBtn" class="btn btn-secondary">关闭</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 联系人页面 -->
+      <div id="contactsPage" class="page hidden">
+        <div class="page-header">
+          <button class="back-btn">←</button>
+          <h2>联系人</h2>
+          <div class="contacts-header-actions">
+            <button id="openAddContactBtn" class="btn btn-primary btn-small">添加联系人</button>
+            <div class="contacts-menu">
+              <button id="contactsMenuBtn" class="btn btn-secondary btn-small btn-icon" aria-haspopup="menu" aria-expanded="false" title="更多">
+                ⋯
+              </button>
+              <div id="contactsMenu" class="network-menu hidden" role="menu">
+                <button type="button" class="network-option" data-action="import">导入 JSON</button>
+                <button type="button" class="network-option" data-action="export">导出 JSON</button>
+              </div>
+            </div>
+            <input
+              type="file"
+              id="contactsImportInput"
+              class="hidden"
+              accept="application/json"
+            />
+          </div>
+        </div>
+        <div class="contacts-body">
+          <div id="contactsList" class="contacts-list">
+            <div class="empty-message">正在加载...</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 添加/编辑联系人模态框 -->
+      <div id="contactEditorModal" class="modal hidden">
+        <div class="modal-overlay"></div>
+        <div class="modal-content contact-editor-modal">
+          <div class="modal-header">
+            <h3 id="contactModalTitle">添加联系人</h3>
+            <button class="btn-close" id="closeContactEditorModal">✕</button>
+          </div>
+          <div class="modal-body">
+            <input type="hidden" id="contactIdInput" />
+            <div class="form-group">
+              <label>联系人名称</label>
+              <input
+                type="text"
+                id="contactNameInput"
+                class="input"
+                placeholder="例如：Alice"
+              />
+            </div>
+            <div class="form-group">
+              <label>联系人地址</label>
+              <input
+                type="text"
+                id="contactAddressInput"
+                class="input"
+                placeholder="0x..."
+              />
+            </div>
+            <div class="form-group">
+              <label>备注（可选）</label>
+              <input
+                type="text"
+                id="contactNoteInput"
+                class="input"
+                placeholder="备注信息"
+              />
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button id="cancelEditContactBtn" class="btn btn-secondary">取消</button>
+            <button id="addContactBtn" class="btn btn-primary">添加联系人</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 修改密码模态框 -->
+      <div id="changePasswordModal" class="modal hidden">
+        <div class="modal-overlay"></div>
+        <div class="modal-content">
+          <div class="modal-header">
+            <h3>修改密码</h3>
+            <button class="btn-close" id="closeChangePasswordModal">✕</button>
+          </div>
+          <div class="modal-body">
+            <div class="form-group">
+              <label>旧密码</label>
+              <input
+                type="password"
+                id="oldPasswordInput"
+                placeholder="输入当前密码"
+              />
+            </div>
+            <div class="form-group">
+              <label>新密码</label>
+              <input
+                type="password"
+                id="newPasswordInput"
+                placeholder="至少8位字符"
+              />
+            </div>
+            <div class="form-group">
+              <label>确认新密码</label>
+              <input
+                type="password"
+                id="confirmNewPasswordInput"
+                placeholder="再次输入新密码"
+              />
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button id="cancelChangePasswordBtn" class="btn btn-secondary">取消</button>
+            <button id="confirmChangePasswordBtn" class="btn btn-primary">修改</button>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- 全局悬浮提示 -->
+    <div id="globalToast" class="toast hidden"></div>
+
+    <!-- 创建账户模态框 -->
+    <div id="createAccountModal" class="modal hidden">
+      <div class="modal-overlay"></div>
+      <div class="modal-content">
+        <div class="modal-header">
+          <h3>创建新账户</h3>
+          <button class="btn-close" id="closeCreateAccountModal">✕</button>
+        </div>
+        <div class="modal-body">
+          <div class="form-group">
+            <label>账户名称</label>
+            <input
+              type="text"
+              id="newAccountName"
+              class="input"
+              placeholder="例如：我的账户 2"
+            />
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" id="cancelCreateAccount">
+            取消
+          </button>
+          <button class="btn btn-primary" id="confirmCreateAccount">
+            创建
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 删除账户模态框 -->
+    <div id="deleteAccountModal" class="modal hidden">
+      <div class="modal-overlay"></div>
+      <div class="modal-content">
+        <div class="modal-header">
+          <h3>删除账户</h3>
+          <button class="btn-close" id="closeDeleteAccountModal">✕</button>
+        </div>
+        <div class="modal-body">
+          <div class="warning-box">
+            <svg
+              width="24"
+              height="24"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+            >
+              <path
+                d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"
+              ></path>
+              <line x1="12" y1="9" x2="12" y2="13"></line>
+              <line x1="12" y1="17" x2="12.01" y2="17"></line>
+            </svg>
+            <p>删除账户后将无法恢复，请确保已备份助记词或私钥！</p>
+          </div>
+
+          <div class="account-info-box">
+            <div class="info-row">
+              <span class="label">账户名称：</span>
+              <span id="deleteAccountName"></span>
+            </div>
+            <div class="info-row">
+              <span class="label">地址：</span>
+              <span id="deleteAccountAddress"></span>
+            </div>
+          </div>
+
+          <input type="hidden" id="deleteAccountId" />
+        </div>
+        <div class="modal-footer">
+          <!-- ✅ 添加 .btn 类 -->
+          <button class="btn btn-secondary" id="cancelDeleteAccount">
+            取消
+          </button>
+          <button class="btn btn-danger" id="confirmDeleteAccount">
+            确认删除
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 重置钱包模态框 -->
+    <div id="resetWalletModal" class="modal hidden">
+      <div class="modal-overlay"></div>
+      <div class="modal-content">
+        <div class="modal-header">
+          <h3>重置钱包</h3>
+          <button class="btn-close" id="closeResetWalletModal">✕</button>
+        </div>
+        <div class="modal-body">
+          <div class="warning-box">
+            <svg
+              width="24"
+              height="24"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+            >
+              <path
+                d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"
+              ></path>
+              <line x1="12" y1="9" x2="12" y2="13"></line>
+              <line x1="12" y1="17" x2="12.01" y2="17"></line>
+            </svg>
+            <p>重置后将删除所有钱包数据，且无法恢复，请确保已备份私钥。</p>
+          </div>
+          <div class="form-group">
+            <label>确认重置</label>
+            <input
+              type="text"
+              id="resetWalletConfirmInput"
+              class="input"
+              placeholder='请输入 "RESET"'
+              autocomplete="off"
+            />
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" id="cancelResetWalletBtn">取消</button>
+          <button class="btn btn-danger" id="confirmResetWalletBtn" disabled>确认重置</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 显示密钥模态框 -->
+    <div id="secretDisplayModal" class="modal hidden">
+      <div class="modal-overlay"></div>
+      <div class="modal-content">
+        <div class="modal-header">
+          <h3 id="secretDisplayTitle">查看密钥</h3>
+          <button class="btn-close" id="closeSecretDisplayModal">✕</button>
+        </div>
+        <div class="modal-body">
+          <div class="warning-box">
+            <svg
+              width="24"
+              height="24"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+            >
+              <path
+                d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"
+              ></path>
+              <line x1="12" y1="9" x2="12" y2="13"></line>
+              <line x1="12" y1="17" x2="12.01" y2="17"></line>
+            </svg>
+            <p id="secretDisplayWarning">⚠️ 请勿泄露密钥信息。</p>
+          </div>
+          <div class="form-group">
+            <label id="secretDisplayLabel">内容</label>
+            <textarea
+              id="secretDisplayValue"
+              readonly
+              rows="3"
+              class="input secret-display-value"
+            ></textarea>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" id="copySecretDisplayBtn">
+            复制
+          </button>
+          <button class="btn btn-primary" id="confirmSecretDisplayBtn">
+            关闭
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div id="identityInputModal" class="modal hidden">
+      <div class="modal-overlay"></div>
+      <div class="modal-content">
+        <div class="modal-header">
+          <h3 id="identityInputTitle">钱包身份</h3>
+          <button class="btn-close" id="closeIdentityInputModal" type="button">✕</button>
+        </div>
+        <div class="modal-body">
+          <p id="identityInputHint" class="settings-hint"></p>
+          <div class="form-group">
+            <label id="identityInputLabel" for="identityInputValue">内容</label>
+            <input id="identityInputValue" class="input" type="text" autocomplete="off" />
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" id="cancelIdentityInputBtn" type="button">取消</button>
+          <button class="btn btn-primary" id="confirmIdentityInputBtn" type="button">继续</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="walletIdentityDetailModal" class="modal hidden">
+      <div class="modal-overlay"></div>
+      <div class="modal-content">
+        <div class="modal-header">
+          <h3>钱包身份</h3>
+          <button class="btn-close" id="closeWalletIdentityDetailModal" type="button">✕</button>
+        </div>
+        <div class="modal-body wallet-identity-details">
+          <div class="detail-row"><span class="detail-label">状态</span><span class="detail-value" id="walletIdentityDetailStatus">-</span></div>
+          <div class="detail-row"><span class="detail-label">用户名</span><span class="detail-value" id="walletIdentityDetailUsername">-</span></div>
+          <div class="detail-row"><span class="detail-label">邮箱</span><span class="detail-value" id="walletIdentityDetailEmail">-</span></div>
+          <div class="detail-row"><span class="detail-label">钱包账户</span><span class="detail-value" id="walletIdentityDetailAddress">-</span></div>
+          <div class="detail-row"><span class="detail-label">身份 DID</span><span class="detail-value" id="walletIdentityDetailDid">-</span></div>
+          <div class="detail-row"><span class="detail-label">身份服务</span><span class="detail-value" id="walletIdentityDetailEndpoint">-</span></div>
+        </div>
+        <div class="modal-footer"><button class="btn btn-primary" id="changeWalletIdentityBtn" type="button">变更验证资料</button></div>
+      </div>
+    </div>
+
+
+    <!-- 第三方库 -->
+    <script type="module" src="lib/ethers-6.16.esm.min.js"></script>
+    <script src="lib/qrcode.min.js"></script>
+
+    <!-- 应用入口 -->
+    <script type="module" src="js/app/popup.js"></script>
+  </body>
+</html>

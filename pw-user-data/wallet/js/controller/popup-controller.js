@@ -1,0 +1,1078 @@
+import { showPage, getCurrentPage, getPageOrigin, showError, showSuccess, copyAddressToClipboard, createCopyToastHandler } from '../common/ui/index.js';
+import { formatDate, formatLocaleDateTime } from '../common/utils/time-utils.js';
+import { POLLING_CONFIG } from '../config/index.js';
+import { WelcomeController } from './welcome-controller.js';
+import { UnlockWalletController } from './wallet/unlock-wallet-controller.js';
+import { NetworkController } from './network-controller.js';
+import { TokenController } from './token/token-controller.js';
+import { AddTokenController } from './token/add-token-controller.js';
+import {
+  AccountListController,
+  AccountDetailController,
+  AccountModalsController,
+  AccountHeaderController
+} from './account/index.js';
+import { TokenBalanceController } from './token/index.js';
+import { SettingController } from './setting-controller.js';
+import { ContactController } from './contact-controller.js';
+import { ImportWalletController } from './wallet/import-wallet-controller.js';
+import { CreateWalletController } from './wallet/create-wallet-controller.js';
+import {
+  TransactionListController,
+  TransactionDetailController,
+  TransactionSendController
+} from './transaction/index.js';
+import { NetworkStorageKeys, SettingsStorageKeys, onStorageChanged } from '../storage/index.js';
+import { ApprovalMessageType } from '../protocol/extension-protocol.js';
+import {
+  applyPopupSessionFields,
+  bindPopupSessionPersistence,
+  clearPopupSessionState,
+  loadPopupSessionState,
+  savePopupSessionState,
+} from '../common/ui/popup-session-state.js';
+
+const USER_GUIDE_URL = 'https://github.com/yeying-community/wallet/blob/main/docs/%E9%92%B1%E5%8C%85%E7%94%A8%E6%88%B7%E4%BD%BF%E7%94%A8%E6%89%8B%E5%86%8C.md';
+
+export class PopupController {
+  constructor({ wallet, transaction, network, token }) {
+    this.wallet = wallet;
+    this.transaction = transaction;
+    this.network = network;
+    this.token = token;
+    this.transactionPollingTimer = null;
+    this.storageUnsubscribe = null;
+
+    this.welcomeController = new WelcomeController({ wallet: this.wallet });
+    this.unlockWalletController = new UnlockWalletController({
+      wallet: this.wallet,
+      onUnlocked: async () => {
+        await Promise.allSettled([
+          this.refreshWalletData(),
+          this.restoreCreateWalletDraft(),
+        ]);
+      }
+    });
+    this.settingController = new SettingController({
+      wallet: this.wallet,
+      transaction: this.transaction,
+      requestPassword: () => this.promptWalletPassword()
+    });
+    this.contactController = new ContactController({ wallet: this.wallet });
+    this.transactionDetailController = new TransactionDetailController({
+      transaction: this.transaction,
+      network: this.network
+    });
+    this.transactionListController = new TransactionListController({
+      wallet: this.wallet,
+      transaction: this.transaction,
+      network: this.network,
+      detailController: this.transactionDetailController
+    });
+    this.accountHeaderController = new AccountHeaderController({
+      wallet: this.wallet
+    });
+    this.tokenBalanceController = new TokenBalanceController({
+      wallet: this.wallet
+    });
+    this.transactionSendController = new TransactionSendController({
+      wallet: this.wallet,
+      transaction: this.transaction,
+      network: this.network,
+      balanceController: this.tokenBalanceController,
+      transactionListController: this.transactionListController
+    });
+    this.tokenController = new TokenController({
+      token: this.token,
+      wallet: this.wallet,
+      networkController: null
+    });
+    this.addTokenController = new AddTokenController({
+      token: this.token,
+      network: this.network,
+      networkController: null,
+      onTokenAdded: () => this.tokenController.loadTokenBalances()
+    });
+    this.networkController = new NetworkController({
+      network: this.network,
+      onNetworkChanged: () => this.handleNetworkChanged()
+    });
+    this.tokenController.setNetworkController(this.networkController);
+    this.tokenController.setTransferTokenChangedHandler((token) => {
+      this.transactionSendController.scheduleFeeEstimate(token);
+    });
+    this.addTokenController.setNetworkController(this.networkController);
+    this.accountListController = null;
+    this.accountDetailController = new AccountDetailController({
+      wallet: this.wallet,
+      onWalletListRefresh: () => this.accountListController?.loadWalletList()
+    });
+    this.accountModalsController = new AccountModalsController({
+      wallet: this.wallet,
+      onWalletListRefresh: () => this.accountListController?.loadWalletList(),
+      onWalletUpdated: () => this.refreshWalletData(),
+      onAccountSelected: (accountId) => this.accountListController?.handleSelectAccount(accountId)
+    });
+    this.accountListController = new AccountListController({
+      wallet: this.wallet,
+      onWalletUpdated: () => this.refreshWalletData(),
+      onOpenAccountDetails: (accountId) => this.accountDetailController.openAccountDetails(accountId),
+      onOpenDeleteAccount: (accountId) => this.accountModalsController.openDeleteAccount(accountId),
+      onOpenCreateAccount: (walletId) => this.accountModalsController.openCreateAccount(walletId),
+      onViewMnemonic: (walletId) => this.accountModalsController.openMnemonic(walletId),
+      onViewPrivateKey: (accountId) => this.accountModalsController.openPrivateKey(accountId),
+      promptPassword: (options) => this.accountModalsController.promptPassword(options)
+    });
+    this.importWalletController = new ImportWalletController({
+      wallet: this.wallet,
+      onImportSuccess: () => this.refreshWalletData()
+    });
+    this.createWalletController = new CreateWalletController({
+      wallet: this.wallet,
+      onCreated: async () => {
+        await this.refreshWalletData();
+        await this.accountListController?.loadWalletList();
+      },
+      onReturnToAccounts: async () => this.openAccountsPage(),
+      promptPassword: (options) => this.accountModalsController.promptPassword(options),
+    });
+  }
+
+  async init() {
+    await this.networkController?.prefillNetworkLabels?.();
+    await this.networkController?.syncSelectedNetwork?.();
+    await this.showInitialPage();
+    this.initCustomSelects();
+    this.bindEvents();
+    bindPopupSessionPersistence({ getCurrentPage });
+  }
+
+  async showInitialPage() {
+    const resumedApproval = await this.resumePendingApproval();
+    if (resumedApproval) {
+      return;
+    }
+
+    const popupSessionState = await loadPopupSessionState().catch(() => null);
+    let startupState;
+    try {
+      startupState = await this.wallet.getStartupState();
+    } catch (error) {
+      console.error('[PopupController] 获取启动状态失败:', error);
+      showPage('unlockPage');
+      this.renderUnlockReason(null);
+      return;
+    }
+
+    if (startupState?.errors?.length) {
+      console.warn('[PopupController] 启动状态检查存在异常:', startupState.errors);
+    }
+
+    if (startupState?.initialized === false) {
+      showPage('welcomePage');
+      return;
+    }
+
+    if (startupState?.unlocked === true) {
+      showPage('walletPage');
+      await this.refreshWalletData();
+      if (await this.restoreCreateWalletDraft()) {
+        return;
+      }
+      await this.restorePopupSessionState(popupSessionState);
+      return;
+    }
+
+    if (startupState?.initialized === true || startupState?.unlocked === false) {
+      showPage('unlockPage');
+      this.renderUnlockReason(null);
+      return;
+    }
+
+    // 两个状态查询都失败时，保守进入解锁页，避免误导用户看到新建/导入流程
+    console.warn('[PopupController] 启动状态未知，默认显示解锁页');
+    showPage('unlockPage');
+    this.renderUnlockReason(null);
+  }
+
+  async restoreCreateWalletDraft() {
+    this.accountListController?.preparePasswordFormForExistingWallet();
+    return await this.createWalletController.restoreDraft();
+  }
+
+  async restorePopupSessionState(state) {
+    if (!state?.pageId || state.pageId === 'walletPage') return false;
+    switch (state.pageId) {
+      case 'accountsPage':
+      case 'mpcWalletDetailPage':
+        await this.openAccountsPage();
+        break;
+      case 'settingsPage':
+        await this.openSettingsPage();
+        break;
+      case 'backupSyncDetailPage':
+        await this.openSettingsPage();
+        this.settingController.backupController.openBackupSyncDetailPage();
+        break;
+      case 'custodyDetailPage':
+        await this.openSettingsPage();
+        this.settingController.mpcController.openCustodyDetailPage();
+        break;
+      case 'mpcDetailPage':
+        await this.openSettingsPage();
+        this.settingController.mpcController.openMpcDetailPage();
+        break;
+      case 'sitesPage':
+        await this.openSitesPage();
+        break;
+      case 'contactsPage':
+        await this.openContactsPage();
+        break;
+      case 'transferPage':
+        await this.openTransferPage();
+        break;
+      case 'networkManagePage':
+        showPage('networkManagePage');
+        await this.networkController?.loadNetworkList?.();
+        break;
+      case 'networkFormPage':
+      case 'tokenAddPage':
+        showPage(state.pageId);
+        break;
+      default:
+        return false;
+    }
+    applyPopupSessionFields(state);
+    if (state.pageId === 'contactsPage' && state.contactEditorOpen) {
+      const contactId = String(state.fields?.contactIdInput || '').trim();
+      this.contactController.editingContactId = contactId || null;
+      document.getElementById('contactEditorModal')?.classList.remove('hidden');
+      const submit = document.getElementById('addContactBtn');
+      if (submit) submit.textContent = contactId ? '保存修改' : '添加联系人';
+    }
+    if (state.pageId === 'transferPage') {
+      this.transactionSendController.scheduleFeeEstimate(
+        this.tokenController?.getCurrentTransferToken?.() || null
+      );
+    }
+    await savePopupSessionState(state.pageId);
+    return true;
+  }
+
+  async resumePendingApproval() {
+    if (!chrome?.runtime?.sendMessage) {
+      return false;
+    }
+
+    try {
+      const response = await chrome.runtime.sendMessage({
+        type: ApprovalMessageType.GET_ACTIVE_APPROVAL
+      });
+      const approval = response?.approval;
+      if (!approval?.windowId) {
+        return false;
+      }
+
+      setTimeout(() => window.close(), 50);
+      return true;
+    } catch (error) {
+      console.warn('[PopupController] 恢复待审批窗口失败:', error);
+      return false;
+    }
+  }
+
+  renderUnlockReason(info) {
+    const container = document.getElementById('unlockReason');
+    if (!container) return;
+
+    const originEl = document.getElementById('unlockReasonOrigin');
+    const methodEl = document.getElementById('unlockReasonMethod');
+    const timeEl = document.getElementById('unlockReasonTime');
+    const methodBadgeEl = document.getElementById('unlockReasonMethodBadge');
+
+    if (!info || (!info.origin && !info.method && !info.timestamp)) {
+      container.classList.add('hidden');
+      return;
+    }
+
+    if (originEl) originEl.textContent = info.origin || '-';
+    const formatted = this.formatUnlockMethod(info.method);
+    if (methodEl) {
+      methodEl.textContent = formatted.detail || formatted.label || info.method || '-';
+      if (info.method) {
+        methodEl.title = info.method;
+      }
+    }
+    if (methodBadgeEl) {
+      methodBadgeEl.textContent = formatted.label || '-';
+    }
+    if (timeEl) {
+      timeEl.textContent = info.timestamp ? formatLocaleDateTime(info.timestamp) : '-';
+    }
+    container.classList.remove('hidden');
+  }
+
+  formatUnlockMethod(method) {
+    const raw = String(method || '').trim();
+    if (!raw) {
+      return { label: '请求', detail: '-' };
+    }
+    const map = {
+      wallet_ucan_sign: { label: 'UCAN', detail: 'UCAN 签名' },
+      wallet_ucan_session: { label: 'UCAN', detail: 'UCAN 会话' },
+      eth_requestAccounts: { label: '连接', detail: '连接钱包' },
+      eth_sendTransaction: { label: '交易', detail: '发送交易' },
+      eth_signTransaction: { label: '交易', detail: '签名交易' },
+      personal_sign: { label: '签名', detail: '消息签名' },
+      eth_sign: { label: '签名', detail: '消息签名' },
+      eth_signTypedData: { label: '签名', detail: '结构化签名' },
+      eth_signTypedData_v4: { label: '签名', detail: '结构化签名' },
+      wallet_requestPermissions: { label: '授权', detail: '权限请求' },
+      wallet_addEthereumChain: { label: '网络', detail: '添加网络' },
+      wallet_switchEthereumChain: { label: '网络', detail: '切换网络' },
+      wallet_watchAsset: { label: '资产', detail: '添加资产' }
+    };
+    if (map[raw]) {
+      return map[raw];
+    }
+    const lower = raw.toLowerCase();
+    if (lower.includes('siwe')) {
+      return { label: 'SIWE', detail: 'SIWE 登录' };
+    }
+    if (lower.includes('ucan')) {
+      return { label: 'UCAN', detail: 'UCAN 请求' };
+    }
+    if (lower.startsWith('eth_')) {
+      return { label: '以太坊', detail: '链上请求' };
+    }
+    if (lower.startsWith('wallet_')) {
+      return { label: '钱包', detail: '钱包请求' };
+    }
+    return { label: '请求', detail: raw };
+  }
+
+  bindEvents() {
+    this.bindBackEvents();
+    this.bindWalletPageEvents();
+    this.bindStorageEvents();
+
+    this.welcomeController.bindEvents();
+    this.unlockWalletController.bindEvents();
+    this.transactionListController.bindEvents();
+    this.transactionDetailController.bindEvents();
+    this.tokenController.bindEvents();
+    this.addTokenController.bindEvents();
+    this.networkController.bindEvents();
+    this.accountListController.bindEvents();
+    this.accountDetailController.bindEvents();
+    this.accountModalsController.bindEvents();
+    this.settingController.bindEvents();
+    this.contactController.bindEvents();
+    this.importWalletController.bindEvents();
+    this.createWalletController.bindEvents();
+  }
+
+  initCustomSelects() {
+    const selects = document.querySelectorAll('select.input:not(.hidden)');
+    selects.forEach((select) => this.enhanceCustomSelect(select));
+    window.refreshWalletSelects = () => {
+      this.refreshCustomSelects();
+    };
+    document.addEventListener('click', (event) => {
+      if (event.target.closest('.custom-select')) return;
+      this.closeCustomSelects();
+    });
+  }
+
+  enhanceCustomSelect(select) {
+    if (!select || select.dataset.customSelectReady === '1') return;
+
+    const wrapper = document.createElement('div');
+    wrapper.className = 'custom-select';
+
+    const trigger = document.createElement('button');
+    trigger.type = 'button';
+    trigger.className = 'custom-select-trigger';
+    trigger.setAttribute('aria-haspopup', 'listbox');
+    trigger.setAttribute('aria-expanded', 'false');
+
+    const label = document.createElement('span');
+    label.className = 'custom-select-label';
+
+    const chevron = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    chevron.setAttribute('class', 'custom-select-chevron');
+    chevron.setAttribute('viewBox', '0 0 16 16');
+    chevron.setAttribute('fill', 'none');
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    path.setAttribute('d', 'M4 6.5L8 10L12 6.5');
+    path.setAttribute('stroke', 'currentColor');
+    path.setAttribute('stroke-width', '1.8');
+    path.setAttribute('stroke-linecap', 'round');
+    path.setAttribute('stroke-linejoin', 'round');
+    chevron.appendChild(path);
+    trigger.append(label, chevron);
+
+    const menu = document.createElement('div');
+    menu.className = 'custom-select-menu hidden';
+    menu.setAttribute('role', 'listbox');
+
+    select.parentNode.insertBefore(wrapper, select);
+    wrapper.appendChild(select);
+    wrapper.appendChild(trigger);
+    wrapper.appendChild(menu);
+
+    select.classList.add('custom-select-native');
+    select.dataset.customSelectReady = '1';
+
+    const syncFromSelect = () => {
+      const selectedOption = select.options[select.selectedIndex] || select.options[0];
+      label.textContent = selectedOption?.textContent || '';
+      trigger.disabled = Boolean(select.disabled);
+      wrapper.classList.toggle('is-disabled', Boolean(select.disabled));
+      menu.innerHTML = '';
+      Array.from(select.options).forEach((option) => {
+        const optionBtn = document.createElement('button');
+        optionBtn.type = 'button';
+        optionBtn.className = 'custom-select-option';
+        if (option.disabled) {
+          optionBtn.disabled = true;
+        }
+        optionBtn.textContent = option.textContent || '';
+        optionBtn.dataset.value = option.value;
+        if (option.value === select.value) {
+          optionBtn.classList.add('is-selected');
+        }
+        optionBtn.addEventListener('click', () => {
+          if (option.disabled) return;
+          if (select.value !== option.value) {
+            select.value = option.value;
+            select.dispatchEvent(new Event('change', { bubbles: true }));
+          } else {
+            syncFromSelect();
+          }
+          this.closeCustomSelects();
+        });
+        menu.appendChild(optionBtn);
+      });
+    };
+
+    trigger.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (select.disabled) return;
+      const willOpen = menu.classList.contains('hidden');
+      this.closeCustomSelects(wrapper);
+      wrapper.classList.toggle('open', willOpen);
+      menu.classList.toggle('hidden', !willOpen);
+      trigger.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
+    });
+
+    trigger.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      event.preventDefault();
+      trigger.click();
+    });
+
+    select.addEventListener('change', syncFromSelect);
+    select._customSelectSync = syncFromSelect;
+    syncFromSelect();
+  }
+
+  refreshCustomSelects() {
+    document.querySelectorAll('select[data-custom-select-ready="1"]').forEach((select) => {
+      select._customSelectSync?.();
+    });
+  }
+
+  closeCustomSelects(exceptWrapper = null) {
+    document.querySelectorAll('.custom-select').forEach((wrapper) => {
+      if (exceptWrapper && wrapper === exceptWrapper) return;
+      wrapper.classList.remove('open');
+      const trigger = wrapper.querySelector('.custom-select-trigger');
+      const menu = wrapper.querySelector('.custom-select-menu');
+      trigger?.setAttribute('aria-expanded', 'false');
+      menu?.classList.add('hidden');
+    });
+  }
+
+  bindStorageEvents() {
+    if (this.storageUnsubscribe) return;
+    this.storageUnsubscribe = onStorageChanged(async (changes, areaName) => {
+      if (areaName && areaName !== 'local') return;
+      if (!changes) return;
+      if (changes[NetworkStorageKeys.SELECTED_NETWORK]) {
+        await this.networkController?.syncSelectedNetwork?.();
+        await this.networkController?.refreshNetworkState?.();
+        await this.handleNetworkChanged();
+      }
+      if (changes[SettingsStorageKeys.USER_SETTINGS]) {
+        await this.updateBackupSyncStatus();
+      }
+      if (getCurrentPage() === 'walletPage') {
+        const activityContent = document.getElementById('activityContent');
+        if (activityContent && !activityContent.classList.contains('hidden')) {
+          await this.transactionListController.loadTransactions();
+        }
+      }
+    });
+  }
+
+  async updateBackupSyncStatus() {
+    const badge = document.getElementById('backupSyncStatusBadge');
+    const badgeText = document.getElementById('backupSyncStatusText');
+    if (!badge) return;
+
+    try {
+      const settings = await this.wallet.getBackupSyncSettings();
+      const enabled = Boolean(settings?.enabled);
+      const conflicts = Array.isArray(settings?.conflicts) ? settings.conflicts : [];
+      const authMode = settings?.authMode || 'siwe';
+      const hasAuth = authMode === 'basic'
+        ? Boolean(settings?.basicAuth)
+        : authMode === 'ucan'
+          ? Boolean(settings?.ucanToken)
+          : Boolean(settings?.authToken);
+      const latestSyncAt = [settings?.lastPullAt, settings?.lastPushAt]
+        .map((value) => {
+          const timestamp = value ? new Date(value).getTime() : 0;
+          return Number.isFinite(timestamp) ? timestamp : 0;
+        })
+        .filter(Boolean)
+        .sort((a, b) => b - a)[0] || 0;
+      const staleSyncThresholdMs = 30 * 60 * 1000;
+
+      let statusText = '同步状态未知';
+      if (!enabled) {
+        statusText = '同步已关闭';
+        badge.className = 'sync-status-badge disabled';
+      } else if (conflicts.length > 0) {
+        statusText = `同步冲突 ${conflicts.length}`;
+        badge.className = 'sync-status-badge danger';
+      } else if (!hasAuth) {
+        statusText = '同步未登录';
+        badge.className = 'sync-status-badge sync-warning';
+      } else {
+        statusText = latestSyncAt > 0 && (Date.now() - latestSyncAt) >= staleSyncThresholdMs
+          ? formatDate(latestSyncAt, 'relative')
+          : '已同步';
+        badge.className = 'sync-status-badge success';
+      }
+
+      const pullText = settings?.lastPullAt ? formatLocaleDateTime(settings.lastPullAt) : '-';
+      const pushText = settings?.lastPushAt ? formatLocaleDateTime(settings.lastPushAt) : '-';
+      badge.title = `${statusText} · 最近拉取: ${pullText} · 最近推送: ${pushText}`;
+      badge.setAttribute('aria-label', statusText);
+      if (badgeText) {
+        badgeText.textContent = statusText;
+      }
+    } catch (error) {
+      badge.className = 'sync-status-badge';
+      badge.title = '同步状态未知';
+      badge.setAttribute('aria-label', '同步状态未知');
+      if (badgeText) {
+        badgeText.textContent = '同步状态未知';
+      }
+    }
+  }
+
+  toggleWalletHeaderMenu() {
+    const menu = document.getElementById('walletHeaderMenu');
+    const button = document.getElementById('walletHeaderMenuBtn');
+    if (!menu || !button) return;
+    const willOpen = menu.classList.contains('hidden');
+    if (willOpen) this.closeAccountSwitcher();
+    menu.classList.toggle('hidden', !willOpen);
+    button.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
+  }
+
+  closeWalletHeaderMenu() {
+    const menu = document.getElementById('walletHeaderMenu');
+    const button = document.getElementById('walletHeaderMenuBtn');
+    if (!menu || !button) return;
+    menu.classList.add('hidden');
+    button.setAttribute('aria-expanded', 'false');
+  }
+
+  async openUserGuide() {
+    try {
+      if (typeof chrome !== 'undefined' && chrome.tabs?.create) {
+        await chrome.tabs.create({ url: USER_GUIDE_URL });
+        return;
+      }
+      window.open(USER_GUIDE_URL, '_blank', 'noopener,noreferrer');
+    } catch (error) {
+      console.error('[PopupController] 打开帮助文档失败:', error);
+      showError('打开帮助文档失败');
+    }
+  }
+
+  bindBackEvents() {
+    document.querySelectorAll('.back-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        this.handleBackNavigation();
+      });
+    });
+  }
+
+  async handleBackNavigation() {
+    const currentPage = getCurrentPage();
+
+    if (currentPage === 'transactionDetailPage') {
+      showPage('walletPage');
+      this.switchWalletTab('activity');
+      await this.transactionListController.loadTransactions();
+      this.transactionListController.restoreActivityScrollPosition();
+      return;
+    }
+
+    const backMap = {
+      setPasswordPage: this.getSetPasswordBackTarget(),
+      importPage: this.getImportBackTarget(),
+      transferPage: 'walletPage',
+      accountsPage: 'walletPage',
+      networkManagePage: 'walletPage',
+      networkFormPage: 'networkManagePage',
+      tokenAddPage: 'walletPage',
+      accountDetailPage: 'accountsPage',
+      mpcWalletDetailPage: 'accountsPage',
+      settingsPage: 'walletPage',
+      contactsPage: document.getElementById('contactsPage')?.dataset?.returnPage || 'walletPage',
+      sitesPage: 'walletPage',
+      backupSyncLogsPage: document.getElementById('backupSyncLogsPage')?.dataset?.returnPage || 'settingsPage',
+      mpcLogsPage: document.getElementById('mpcLogsPage')?.dataset?.returnPage || 'mpcDetailPage',
+      walletIdentityDetailPage: 'settingsPage',
+      walletIdentityPasskeyPage: 'walletIdentityDetailPage',
+      walletIdentityAuthenticatorPage: 'walletIdentityDetailPage',
+      walletIdentityEditPage: 'walletIdentityDetailPage',
+      backupSyncDetailPage: 'settingsPage',
+      custodyDetailPage: 'settingsPage',
+      mpcDetailPage: 'settingsPage',
+    };
+
+    const targetPage = backMap[currentPage];
+    if (targetPage) {
+      if (currentPage === 'contactsPage') {
+        const contactsPage = document.getElementById('contactsPage');
+        if (contactsPage?.dataset?.returnPage) {
+          delete contactsPage.dataset.returnPage;
+        }
+      }
+      if (currentPage === 'backupSyncLogsPage') {
+        delete document.getElementById('backupSyncLogsPage')?.dataset.returnPage;
+      }
+      if (currentPage === 'mpcLogsPage') {
+        delete document.getElementById('mpcLogsPage')?.dataset.returnPage;
+      }
+      showPage(targetPage);
+      if (targetPage === 'networkManagePage') {
+        await this.networkController?.loadNetworkList();
+      }
+    } else {
+      showPage('walletPage');
+    }
+  }
+
+  getSetPasswordBackTarget() {
+    const origin = getPageOrigin('setPasswordPage', 'welcome');
+    return origin === 'accounts' ? 'accountsPage' : 'welcomePage';
+  }
+
+  getImportBackTarget() {
+    const origin = getPageOrigin('importPage', 'welcome');
+    return origin === 'accounts' ? 'accountsPage' : 'welcomePage';
+  }
+
+  async openAccountsPage() {
+    this.closeAccountSwitcher();
+    this.stopTransactionPolling();
+    showPage('accountsPage');
+    await this.accountListController.loadWalletList();
+  }
+
+  async toggleAccountSwitcher() {
+    const menu = document.getElementById('accountSwitcherMenu');
+    const header = document.getElementById('accountHeader');
+    const arrow = document.getElementById('accountDropdownBtn');
+    if (!menu || !header || !arrow) return;
+    const willOpen = menu.classList.contains('hidden');
+    if (!willOpen) {
+      this.closeAccountSwitcher();
+      return;
+    }
+    this.closeWalletHeaderMenu();
+    await this.renderAccountSwitcher();
+    menu.classList.remove('hidden');
+    header.classList.add('switcher-open');
+    arrow.setAttribute('aria-expanded', 'true');
+  }
+
+  closeAccountSwitcher() {
+    document.getElementById('accountSwitcherMenu')?.classList.add('hidden');
+    document.getElementById('accountHeader')?.classList.remove('switcher-open');
+    document.getElementById('accountDropdownBtn')?.setAttribute('aria-expanded', 'false');
+  }
+
+  async renderAccountSwitcher() {
+    const list = document.getElementById('accountSwitcherList');
+    if (!list) return;
+    const wallets = await this.wallet.getWalletList();
+    const accounts = wallets.flatMap(wallet => Array.isArray(wallet.accounts) ? wallet.accounts : []);
+    list.innerHTML = '';
+    accounts.forEach((account) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = `account-switcher-item${account.isSelected ? ' active' : ''}`;
+      button.dataset.accountId = account.id;
+      button.setAttribute('role', 'menuitem');
+
+      const name = document.createElement('span');
+      name.className = 'account-switcher-name';
+      name.textContent = account.name || '账户';
+      const address = document.createElement('span');
+      address.className = 'account-switcher-address';
+      const value = String(account.address || '');
+      address.textContent = value.length > 12 ? `${value.slice(0, 6)}...${value.slice(-4)}` : value;
+      button.append(name, address);
+      if (account.isSelected) {
+        const check = document.createElement('span');
+        check.className = 'account-switcher-check';
+        check.textContent = '✓';
+        button.appendChild(check);
+      }
+      button.addEventListener('click', async (event) => {
+        event.stopPropagation();
+        if (account.isSelected) {
+          this.closeAccountSwitcher();
+          return;
+        }
+        this.closeAccountSwitcher();
+        await this.accountListController.handleSelectAccount(account.id);
+      });
+      list.appendChild(button);
+    });
+  }
+
+  async openSettingsPage() {
+    this.stopTransactionPolling();
+    showPage('settingsPage');
+    await this.settingController.loadBackupSyncSettings();
+    await this.settingController.loadMpcSettings();
+    await this.settingController.loadCustodySettings();
+  }
+
+  async openBackupSyncLogsPageFromHeader() {
+    this.stopTransactionPolling();
+    await this.settingController.backupController.openBackupSyncLogsPage('walletPage');
+  }
+
+  async openSitesPage() {
+    this.stopTransactionPolling();
+    showPage('sitesPage');
+    const searchInput = document.getElementById('siteSearchInput');
+    if (searchInput) {
+      searchInput.value = '';
+    }
+    await this.settingController.loadAuthorizedSites();
+  }
+
+  async openContactsPage() {
+    this.stopTransactionPolling();
+    showPage('contactsPage');
+    await this.contactController.loadContacts();
+  }
+
+  async openTransferPage() {
+    this.stopTransactionPolling();
+    showPage('transferPage');
+    await this.tokenController?.prepareTransferSelectors?.();
+    await this.contactController?.loadContacts?.();
+    this.transactionSendController.setFeeEstimateText('-');
+    this.transactionSendController.scheduleFeeEstimate(
+      this.tokenController?.getCurrentTransferToken?.() || null
+    );
+  }
+
+  async lockWallet() {
+    try {
+      this.closeWalletHeaderMenu();
+      this.stopTransactionPolling();
+      await this.wallet.lock();
+      await clearPopupSessionState();
+
+      const passwordInput = document.getElementById('unlockPassword');
+      if (passwordInput) {
+        passwordInput.value = '';
+      }
+      this.renderUnlockReason(null);
+      showPage('unlockPage');
+      showSuccess('钱包已锁定');
+    } catch (error) {
+      console.error('[PopupController] 锁定钱包失败:', error);
+      showError('锁定失败: ' + (error?.message || '未知错误'));
+    }
+  }
+
+  async refreshWalletData() {
+    const tasks = [
+      this.accountHeaderController?.refreshHeader?.(),
+      this.tokenBalanceController?.refreshBalanceSilently?.(),
+      this.networkController?.refreshNetworkState?.(),
+      this.updateBackupSyncStatus(),
+    ];
+    const tokensContent = document.getElementById('tokensContent');
+    if (tokensContent && !tokensContent.classList.contains('hidden')) {
+      tasks.push(this.tokenController?.loadTokenBalances?.());
+    }
+    await Promise.allSettled(tasks.filter(Boolean));
+  }
+
+  startTransactionPolling() {
+    this.stopTransactionPolling();
+    const interval = POLLING_CONFIG?.TRANSACTION || 5000;
+    this.transactionPollingTimer = setInterval(async () => {
+      if (getCurrentPage() !== 'walletPage') return;
+      const activityContent = document.getElementById('activityContent');
+      if (!activityContent || activityContent.classList.contains('hidden')) return;
+      await this.transactionListController.loadTransactions();
+    }, interval);
+  }
+
+  stopTransactionPolling() {
+    if (!this.transactionPollingTimer) return;
+    clearInterval(this.transactionPollingTimer);
+    this.transactionPollingTimer = null;
+  }
+
+  async handleNetworkChanged() {
+    await this.accountHeaderController?.refreshHeader?.();
+    await this.tokenBalanceController?.refreshBalanceSilently?.();
+    await this.tokenController?.loadTokenBalances?.();
+  }
+
+  bindWalletPageEvents() {
+    const accountHeader = document.getElementById('accountHeader');
+    const accountDropdownBtn = document.getElementById('accountDropdownBtn');
+    const accountAddress = document.getElementById('accountAddress');
+    const copyAddressBtn = document.getElementById('copyHeaderAddressBtn');
+    const copyHeaderAddress = async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const address = accountAddress?.dataset?.address || '';
+      if (!address) return;
+      const copied = await copyAddressToClipboard(address, createCopyToastHandler({
+        onSuccess: message => showSuccess(message),
+        onError: message => showError(message)
+      }));
+      if (!copied || !copyAddressBtn) return;
+      copyAddressBtn.querySelector('.copy-icon')?.classList.add('hidden');
+      copyAddressBtn.querySelector('.copy-success-icon')?.classList.remove('hidden');
+      setTimeout(() => {
+        copyAddressBtn.querySelector('.copy-icon')?.classList.remove('hidden');
+        copyAddressBtn.querySelector('.copy-success-icon')?.classList.add('hidden');
+      }, 1200);
+    };
+    copyAddressBtn?.addEventListener('click', copyHeaderAddress);
+    if (accountHeader) {
+      accountHeader.addEventListener('click', async (event) => {
+        if (event.target.closest('#accountSwitcherMenu')) return;
+        await this.toggleAccountSwitcher();
+      });
+      accountHeader.addEventListener('keydown', async (event) => {
+        if (event.target !== accountHeader) return;
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        event.preventDefault();
+        await this.toggleAccountSwitcher();
+      });
+    }
+
+    if (accountDropdownBtn) {
+      accountDropdownBtn.addEventListener('click', async (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        await this.toggleAccountSwitcher();
+      });
+    }
+
+    document.getElementById('accountSwitcherMenu')?.addEventListener('click', event => event.stopPropagation());
+    document.getElementById('manageAccountsBtn')?.addEventListener('click', async (event) => {
+      event.stopPropagation();
+      await this.openAccountsPage();
+    });
+
+    const syncBadge = document.getElementById('backupSyncStatusBadge');
+    if (syncBadge) {
+      syncBadge.addEventListener('click', async (event) => {
+        event.preventDefault();
+        await this.openBackupSyncLogsPageFromHeader();
+      });
+    }
+
+    const transferBtn = document.getElementById('transferBtn');
+    if (transferBtn) {
+      transferBtn.addEventListener('click', async () => {
+        this.closeWalletHeaderMenu();
+        await this.openTransferPage();
+      });
+    }
+
+    const updateTransferFee = () => {
+      this.transactionSendController.scheduleFeeEstimate(
+        this.tokenController?.getCurrentTransferToken?.() || null
+      );
+    };
+    const recipientInput = document.getElementById('recipientAddress');
+    if (recipientInput && !recipientInput.dataset.feeEstimateBound) {
+      recipientInput.dataset.feeEstimateBound = '1';
+      recipientInput.addEventListener('input', updateTransferFee);
+    }
+    const amountInput = document.getElementById('amount');
+    if (amountInput && !amountInput.dataset.feeEstimateBound) {
+      amountInput.dataset.feeEstimateBound = '1';
+      amountInput.addEventListener('input', updateTransferFee);
+    }
+
+    const walletHeaderMenuBtn = document.getElementById('walletHeaderMenuBtn');
+    const walletHeaderMenu = document.getElementById('walletHeaderMenu');
+    if (walletHeaderMenuBtn && walletHeaderMenu) {
+      walletHeaderMenuBtn.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        this.toggleWalletHeaderMenu();
+      });
+    }
+
+    const settingsBtn = document.getElementById('settingsBtn');
+    if (settingsBtn) {
+      settingsBtn.addEventListener('click', async () => {
+        this.closeWalletHeaderMenu();
+        await this.openSettingsPage();
+      });
+    }
+
+    const sitesManageBtn = document.getElementById('sitesManageBtn');
+    if (sitesManageBtn) {
+      sitesManageBtn.addEventListener('click', async () => {
+        this.closeWalletHeaderMenu();
+        await this.openSitesPage();
+      });
+    }
+
+    const contactsBtn = document.getElementById('contactsBtn');
+    if (contactsBtn) {
+      contactsBtn.addEventListener('click', async () => {
+        this.closeWalletHeaderMenu();
+        await this.openContactsPage();
+      });
+    }
+
+    const helpDocBtn = document.getElementById('helpDocBtn');
+    if (helpDocBtn) {
+      helpDocBtn.addEventListener('click', async () => {
+        this.closeWalletHeaderMenu();
+        await this.openUserGuide();
+      });
+    }
+
+    const lockWalletBtn = document.getElementById('lockWalletBtn');
+    if (lockWalletBtn) {
+      lockWalletBtn.addEventListener('click', async () => {
+        await this.lockWallet();
+      });
+    }
+
+    document.addEventListener('click', (event) => {
+      if (!walletHeaderMenu || !walletHeaderMenuBtn) return;
+      const target = event.target;
+      if (walletHeaderMenu.contains(target) || walletHeaderMenuBtn.contains(target)) {
+        return;
+      }
+      this.closeWalletHeaderMenu();
+      if (!document.getElementById('accountHeader')?.contains(target)) {
+        this.closeAccountSwitcher();
+      }
+    });
+
+    const sendBtn = document.getElementById('sendBtn');
+    if (sendBtn) {
+      sendBtn.addEventListener('click', async () => {
+        const selectedToken = this.tokenController?.getCurrentTransferToken?.();
+        await this.transactionSendController.handleSendTransaction({
+          requestPassword: () => this.promptWalletPassword(),
+          silentBalanceRefresh: true,
+          token: selectedToken || null,
+          onSuccess: async () => {
+            showPage('walletPage');
+            this.switchWalletTab('activity');
+          }
+        });
+      });
+    }
+
+    const collectiblesTab = document.getElementById('collectiblesTab');
+    if (collectiblesTab) {
+      collectiblesTab.addEventListener('click', () => {
+        this.switchWalletTab('collectibles');
+      });
+    }
+
+    const tokensTab = document.getElementById('tokensTab');
+    if (tokensTab) {
+      tokensTab.addEventListener('click', async () => {
+        this.switchWalletTab('tokens');
+        await this.tokenController?.loadTokenBalances?.();
+      });
+    }
+
+    const activityTab = document.getElementById('activityTab');
+    if (activityTab) {
+      activityTab.addEventListener('click', async () => {
+        this.switchWalletTab('activity');
+        await this.transactionListController.loadTransactions();
+      });
+    }
+
+  }
+
+  switchWalletTab(tabId) {
+    document.querySelectorAll('.tab').forEach(tab => {
+      tab.classList.remove('active');
+    });
+    const tabBtn = document.getElementById(`${tabId}Tab`);
+    if (tabBtn) {
+      tabBtn.classList.add('active');
+    }
+
+    document.querySelectorAll('.tab-content').forEach(content => {
+      content.classList.add('hidden');
+    });
+
+    const targetContent = document.getElementById(`${tabId}Content`);
+    if (targetContent) {
+      targetContent.classList.remove('hidden');
+      console.log(`[UI] 切换标签: ${tabId}`);
+    }
+
+    if (tabId === 'activity') {
+      this.startTransactionPolling();
+    } else {
+      this.stopTransactionPolling();
+    }
+  }
+
+  async promptWalletPassword() {
+    if (!this.accountModalsController?.promptPassword) {
+      return null;
+    }
+    return await this.accountModalsController.promptPassword({
+      title: '解锁钱包',
+      confirmText: '确认',
+      placeholder: '输入密码',
+      onConfirm: async (input) => {
+        if (!input || input.length < 8) {
+          throw new Error('密码至少需要8位字符');
+        }
+      }
+    });
+  }
+}

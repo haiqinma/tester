@@ -1,0 +1,256 @@
+/**
+ * 存储模块统一导出
+ * 提供所有存储相关的功能
+ */
+
+import { getTimestamp } from '../common/utils/time-utils.js';
+import { clearStorage, getAllStorage, setStorage } from './storage-base.js';
+
+// ==================== 存储键 ====================
+export {
+  StorageKeys,
+  WalletStorageKeys,
+  NetworkStorageKeys,
+  PermissionStorageKeys,
+  SettingsStorageKeys,
+  TransactionStorageKeys,
+  ContactsStorageKeys,
+  UcanStorageKeys,
+  MpcStorageKeys,
+  IdentityStorageKeys
+} from './storage-keys.js';
+
+// ==================== 基础存储 ====================
+export {
+  getStorage,
+  setStorage,
+  removeStorage,
+  clearStorage,
+  getAllStorage,
+  getValue,
+  setValue,
+  getMap,
+  setMap,
+  getMapItem,
+  setMapItem,
+  deleteMapItem,
+  deleteMapItems,
+  getArray,
+  setArray,
+  onStorageChanged
+} from './storage-base.js';
+
+// ==================== IndexedDB 基础（交易历史 transaction-storage 使用） ====================
+export {
+  registerStore,
+  openDatabase,
+  runStoreTransaction
+} from './indexeddb-base.js';
+
+// ==================== 钱包存储 ====================
+export {
+  saveWallet,
+  getWallet,
+  getWallets,
+  deleteWallet,
+  walletExists
+} from './wallet-storage.js';
+
+// ==================== 账户存储 ====================
+export {
+  saveAccount,
+  getAccount,
+  getAccounts,
+  getAccountList,
+  getWalletAccounts,
+  updateAccount,
+  deleteAccount,
+  deleteAccounts,
+  hasAccounts,
+  accountExists,
+  setSelectedAccountId,
+  getSelectedAccountId,
+  getSelectedAccount,
+  clearSelectedAccount
+} from './account-storage.js';
+
+// ==================== 网络存储 ====================
+export {
+  saveSelectedNetworkName,
+  getSelectedNetworkName,
+  saveNetworks,
+  getNetworks,
+  addNetwork,
+  deleteNetwork,
+  updateNetwork,
+  ensureDefaultNetworks,
+  getNetworkConfigByKey,
+  getAllNetworks,
+  getNetworkByChainId
+} from './network-storage.js';
+
+// ==================== 权限存储 ====================
+export {
+  getAllAuthorizations,
+  saveAuthorization,
+  isAuthorized,
+  getAuthorizedAddress,
+  getAuthorization,
+  deleteAuthorization,
+  clearAllAuthorizations,
+  getAuthorizationList
+} from './permission-storage.js';
+
+// ==================== 设置存储 ====================
+export {
+  getUserSettings,
+  saveUserSettings,
+  getUserSetting,
+  updateUserSetting,
+  deleteUserSetting,
+  resetUserSettings,
+  updateUserSettings
+} from './settings-storage.js';
+
+export {
+  saveIdentity,
+  saveEncryptedIdentity,
+  getIdentity,
+  getIdentities,
+  deleteIdentity,
+  decryptIdentityKeyMaterial,
+  saveIdentityCredentials,
+  getIdentityCredentials
+} from './identity-storage.js';
+
+// ==================== 交易存储 ====================
+export {
+  getAllTransactions,
+  saveAllTransactions,
+  addTransaction,
+  updateTransaction,
+  getTransactionsByAddress,
+  clearTransactionsByAddress
+} from './transaction-storage.js';
+
+// ==================== 联系人存储 ====================
+export {
+  getContactsMap,
+  getContactList,
+  getContact,
+  saveContact,
+  deleteContact
+} from './contact-storage.js';
+
+// ==================== MPC 存储 ====================
+export {
+  getMpcDeviceId,
+  setMpcDeviceId,
+  getMpcDeviceKeys,
+  getMpcDeviceKey,
+  saveMpcDeviceKey,
+  deleteMpcDeviceKey,
+  getMpcWallets,
+  getMpcWallet,
+  saveMpcWallet,
+  deleteMpcWallet,
+  getMpcWalletList,
+  getMpcParticipants,
+  getMpcParticipant,
+  saveMpcParticipant,
+  deleteMpcParticipant,
+  getMpcParticipantList,
+  getMpcKeyShares,
+  getMpcKeyShare,
+  saveMpcKeyShare,
+  deleteMpcKeyShare,
+  getMpcSessions,
+  getMpcSession,
+  saveMpcSession,
+  deleteMpcSession,
+  getMpcSessionList,
+  getMpcWireStates,
+  getMpcWireState,
+  saveMpcWireState,
+  deleteMpcWireState,
+  getMpcWireStateList,
+  getMpcSignRequests,
+  getMpcSignRequest,
+  saveMpcSignRequest,
+  deleteMpcSignRequest,
+  getMpcMessages,
+  getMpcMessage,
+  saveMpcMessage,
+  deleteMpcMessage,
+  getMpcMessageList,
+  getMpcAuditLogs,
+  setMpcAuditLogs,
+  appendMpcAuditLog,
+  clearMpcAuditLogs,
+  getMpcAuditExportConfig,
+  saveMpcAuditExportConfig,
+  getMpcAuditExportQueue,
+  setMpcAuditExportQueue,
+  enqueueMpcAuditExport,
+  dequeueMpcAuditExport,
+  clearMpcAuditExportQueue
+} from './mpc-storage.js';
+
+// ==================== 工具方法 ====================
+
+/**
+ * 导出所有数据（备份）
+ * @returns {Promise<Object>}
+ */
+export async function exportAllData() {
+  try {
+    const data = await getAllStorage();
+
+    return {
+      data,
+      timestamp: getTimestamp(),
+      version: '1.0.0'
+    };
+  } catch (error) {
+    console.error('❌ Export all data failed:', error);
+    throw error;
+  }
+}
+
+/**
+ * 导入数据（恢复）
+ * @param {Object} backup - 备份数据
+ * @returns {Promise<void>}
+ */
+export async function importAllData(backup) {
+  try {
+    if (!backup || !backup.data) {
+      throw new Error('Invalid backup data');
+    }
+
+    // 清空现有数据
+    await clearStorage();
+
+    // 导入备份数据
+    await setStorage(backup.data);
+
+    console.log('✅ Data imported successfully');
+  } catch (error) {
+    console.error('❌ Import data failed:', error);
+    throw error;
+  }
+}
+
+/**
+ * 清空所有数据（重置钱包）
+ * @returns {Promise<void>}
+ */
+export async function clearAllData() {
+  try {
+    await clearStorage();
+    console.log('✅ All data cleared');
+  } catch (error) {
+    console.error('❌ Clear all data failed:', error);
+    throw error;
+  }
+}
